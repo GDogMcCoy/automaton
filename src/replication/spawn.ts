@@ -14,6 +14,7 @@ import type {
   AutomatonDatabase,
   ChildAutomaton,
   GenesisConfig,
+  AutomatonConfig,
 } from "../types.js";
 import { MAX_CHILDREN } from "../types.js";
 import { ulid } from "ulid";
@@ -26,7 +27,13 @@ export async function spawnChild(
   identity: AutomatonIdentity,
   db: AutomatonDatabase,
   genesis: GenesisConfig,
+  config?: AutomatonConfig,
 ): Promise<ChildAutomaton> {
+  // Check if replication is enabled
+  if (!config?.replicationEnabled) {
+    throw new Error("Replication is disabled. Set replicationEnabled: true in config to enable.");
+  }
+
   // Check child limit
   const existing = db.getChildren().filter(
     (c) => c.status !== "dead",

@@ -102,5 +102,7 @@ export function createConfig(params: {
     skillsDir: DEFAULT_CONFIG.skillsDir || "~/.automaton/skills",
     maxChildren: DEFAULT_CONFIG.maxChildren || 3,
     parentAddress: params.parentAddress,
+    selfModMode: DEFAULT_CONFIG.selfModMode || "disabled",
+    replicationEnabled: DEFAULT_CONFIG.replicationEnabled ?? false,
   };
 }

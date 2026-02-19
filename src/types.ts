@@ -31,6 +31,8 @@ export interface ProvisionResult {
 
 // ─── Configuration ───────────────────────────────────────────────
 
+export type SelfModMode = "disabled" | "gated" | "full";
+
 export interface AutomatonConfig {
   name: string;
   genesisPrompt: string;
@@ -52,6 +54,8 @@ export interface AutomatonConfig {
   maxChildren: number;
   parentAddress?: Address;
   socialRelayUrl?: string;
+  selfModMode: SelfModMode;
+  replicationEnabled: boolean;
 }
 
 export const DEFAULT_CONFIG: Partial<AutomatonConfig> = {
@@ -65,6 +69,8 @@ export const DEFAULT_CONFIG: Partial<AutomatonConfig> = {
   skillsDir: "~/.automaton/skills",
   maxChildren: 3,
   socialRelayUrl: "https://social.conway.tech",
+  selfModMode: "disabled",
+  replicationEnabled: false,
 };
 
 // ─── Agent State ─────────────────────────────────────────────────

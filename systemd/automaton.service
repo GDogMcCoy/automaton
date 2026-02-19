@@ -1,0 +1,49 @@
+[Unit]
+Description=Conway Automaton - Personal AI Agent
+Documentation=https://github.com/Conway-Research/automaton
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=automaton
+Group=automaton
+WorkingDirectory=/opt/automaton
+ExecStart=/usr/bin/node dist/index.js --run
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=always
+RestartSec=10
+StartLimitInterval=60
+StartLimitBurst=3
+
+# Environment
+Environment=NODE_ENV=production
+EnvironmentFile=-/etc/automaton/env
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/automaton /var/log/automaton
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=4096
+MemoryMax=2G
+CPUQuota=200%
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=automaton
+
+[Install]
+WantedBy=multi-user.target

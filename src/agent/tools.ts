@@ -1134,10 +1134,10 @@ Model: ${ctx.inference.getDefaultModel()}
       },
     },
 
-    // ── Replication Tools ──
+    // ── Replication Tools (disabled by default) ──
     {
       name: "spawn_child",
-      description: "Spawn a child automaton in a new Conway sandbox.",
+      description: "Spawn a child automaton in a new Conway sandbox. Requires replicationEnabled config flag.",
       category: "replication",
       dangerous: true,
       parameters: {
@@ -1150,6 +1150,10 @@ Model: ${ctx.inference.getDefaultModel()}
         required: ["name"],
       },
       execute: async (args, ctx) => {
+        if (!ctx.config.replicationEnabled) {
+          return "Replication is disabled. Set replicationEnabled: true in config to enable.";
+        }
+
         const { generateGenesisConfig } = await import("../replication/genesis.js");
         const { spawnChild } = await import("../replication/spawn.js");
 
@@ -1159,7 +1163,7 @@ Model: ${ctx.inference.getDefaultModel()}
           message: args.message as string | undefined,
         });
 
-        const child = await spawnChild(ctx.conway, ctx.identity, ctx.db, genesis);
+        const child = await spawnChild(ctx.conway, ctx.identity, ctx.db, genesis, ctx.config);
         return `Child spawned: ${child.name} in sandbox ${child.sandboxId} (status: ${child.status})`;
       },
     },
@@ -1181,7 +1185,7 @@ Model: ${ctx.inference.getDefaultModel()}
     },
     {
       name: "fund_child",
-      description: "Transfer credits to a child automaton.",
+      description: "Transfer credits to a child automaton. Requires replicationEnabled config flag.",
       category: "replication",
       dangerous: true,
       parameters: {
@@ -1193,6 +1197,9 @@ Model: ${ctx.inference.getDefaultModel()}
         required: ["child_id", "amount_cents"],
       },
       execute: async (args, ctx) => {
+        if (!ctx.config.replicationEnabled) {
+          return "Replication is disabled. Set replicationEnabled: true in config to enable.";
+        }
         const child = ctx.db.getChildById(args.child_id as string);
         if (!child) return `Child ${args.child_id} not found.`;
 
@@ -1224,7 +1231,7 @@ Model: ${ctx.inference.getDefaultModel()}
     },
     {
       name: "check_child_status",
-      description: "Check the current status of a child automaton.",
+      description: "Check the current status of a child automaton. Requires replicationEnabled config flag.",
       category: "replication",
       parameters: {
         type: "object",
@@ -1234,6 +1241,9 @@ Model: ${ctx.inference.getDefaultModel()}
         required: ["child_id"],
       },
       execute: async (args, ctx) => {
+        if (!ctx.config.replicationEnabled) {
+          return "Replication is disabled. Set replicationEnabled: true in config to enable.";
+        }
         const { checkChildStatus } = await import("../replication/spawn.js");
         return await checkChildStatus(ctx.conway, ctx.db, args.child_id as string);
       },
