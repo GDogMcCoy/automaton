@@ -19,6 +19,13 @@ const AUTOMATON_DIR = path.join(
 );
 const WALLET_FILE = path.join(AUTOMATON_DIR, "wallet.json");
 
+// Portable encrypted wallet stored inside the git repo
+const REPO_WALLET_ENC = path.join(
+  process.cwd(),
+  ".automaton",
+  "wallet.enc",
+);
+
 // ─── Encryption Constants ────────────────────────────────────────
 const ENCRYPTED_PREFIX = "ENC:";
 const SCRYPT_N = 16384; // 2^14
@@ -176,7 +183,30 @@ export async function getWallet(passphrase?: string): Promise<{
 
     const account = privateKeyToAccount(walletData.privateKey);
     return { account, isNew: false };
-  } else {
+  }
+
+  // Fallback: check for encrypted wallet in the git repo
+  if (fs.existsSync(REPO_WALLET_ENC) && resolvedPassphrase) {
+    console.log("[WALLET] No local wallet found, importing from repo-stored encrypted wallet...");
+    try {
+      const address = importWalletFromRepo(resolvedPassphrase);
+      console.log(`[WALLET] Imported wallet from repo: ${address}`);
+      const fileContent = fs.readFileSync(WALLET_FILE, "utf-8");
+      const walletData = JSON.parse(fileContent) as WalletData;
+      const account = privateKeyToAccount(walletData.privateKey);
+      return { account, isNew: false };
+    } catch (err: any) {
+      console.warn(`[WALLET] Failed to import repo wallet: ${err.message}`);
+    }
+  } else if (fs.existsSync(REPO_WALLET_ENC) && !resolvedPassphrase) {
+    console.warn(
+      "[WALLET] Found encrypted wallet in repo but no passphrase provided. " +
+        "Set AUTOMATON_WALLET_PASSPHRASE to auto-import.",
+    );
+  }
+
+  // Generate new wallet
+  {
     const privateKey = generatePrivateKey();
     const account = privateKeyToAccount(privateKey);
 
@@ -325,4 +355,134 @@ export function migrateWalletToEncrypted(
 
   const encrypted = encryptWallet(walletData, passphrase);
   fs.writeFileSync(walletPath, encrypted, { mode: 0o600 });
+}
+
+// ─── Portable Wallet (repo-stored, encrypted) ──────────────────
+
+/**
+ * Get the path to the repo-local encrypted wallet file.
+ */
+export function getRepoWalletPath(): string {
+  return REPO_WALLET_ENC;
+}
+
+/**
+ * Export the wallet to an encrypted file inside the git repo.
+ *
+ * This allows the wallet to travel with the codebase.
+ * The passphrase must be remembered or stored in AUTOMATON_WALLET_PASSPHRASE.
+ *
+ * Returns the address of the exported wallet.
+ */
+export function exportWalletToRepo(passphrase: string, repoPath?: string): string {
+  const targetPath = repoPath || REPO_WALLET_ENC;
+
+  // Read the current wallet
+  if (!fs.existsSync(WALLET_FILE)) {
+    throw new Error(
+      `No wallet file found at ${WALLET_FILE}. Run 'automaton --init' first.`,
+    );
+  }
+
+  const fileContent = fs.readFileSync(WALLET_FILE, "utf-8");
+  let walletData: WalletData;
+
+  if (isEncryptedWallet(fileContent)) {
+    // Already encrypted on disk — need passphrase to re-read, then re-encrypt for repo
+    const resolved = resolvePassphrase(passphrase);
+    if (!resolved) {
+      throw new Error("Wallet is encrypted but no passphrase provided to read it.");
+    }
+    walletData = decryptWallet(fileContent, resolved) as WalletData;
+  } else {
+    walletData = JSON.parse(fileContent);
+  }
+
+  // Validate
+  if (!walletData.privateKey || !walletData.privateKey.startsWith("0x")) {
+    throw new Error("Wallet file does not contain a valid privateKey field");
+  }
+
+  // Ensure target directory exists
+  const targetDir = path.dirname(targetPath);
+  if (!fs.existsSync(targetDir)) {
+    fs.mkdirSync(targetDir, { recursive: true });
+  }
+
+  // Encrypt and write to repo
+  const encrypted = encryptWallet(walletData, passphrase);
+  fs.writeFileSync(targetPath, encrypted, { mode: 0o644 }); // readable by owner, group, others (it's encrypted)
+
+  const account = privateKeyToAccount(walletData.privateKey);
+  return account.address;
+}
+
+/**
+ * Import a wallet from the repo-local encrypted file into ~/.automaton/wallet.json.
+ *
+ * This is used when setting up a new machine — the encrypted wallet travels
+ * with git, and the passphrase decrypts it into the local home directory.
+ *
+ * Returns the address of the imported wallet.
+ */
+export function importWalletFromRepo(passphrase: string, repoPath?: string): string {
+  const sourcePath = repoPath || REPO_WALLET_ENC;
+
+  if (!fs.existsSync(sourcePath)) {
+    throw new Error(
+      `No encrypted wallet found at ${sourcePath}. ` +
+        "Export one first with 'automaton --wallet-export'.",
+    );
+  }
+
+  const encrypted = fs.readFileSync(sourcePath, "utf-8");
+
+  if (!isEncryptedWallet(encrypted)) {
+    throw new Error(
+      "Repo wallet file is not encrypted. Refusing to import plaintext wallet from repo.",
+    );
+  }
+
+  // Decrypt to verify passphrase is correct
+  const walletData = decryptWallet(encrypted, passphrase) as WalletData;
+
+  if (!walletData.privateKey || !walletData.privateKey.startsWith("0x")) {
+    throw new Error("Decrypted wallet does not contain a valid privateKey");
+  }
+
+  // Ensure target directory exists
+  if (!fs.existsSync(AUTOMATON_DIR)) {
+    fs.mkdirSync(AUTOMATON_DIR, { recursive: true, mode: 0o700 });
+  }
+
+  // Write plaintext to local home (0o600 permissions)
+  fs.writeFileSync(WALLET_FILE, JSON.stringify(walletData, null, 2), {
+    mode: 0o600,
+  });
+
+  const account = privateKeyToAccount(walletData.privateKey);
+  return account.address;
+}
+
+/**
+ * Check whether a repo-local encrypted wallet exists.
+ */
+export function repoWalletExists(repoPath?: string): boolean {
+  return fs.existsSync(repoPath || REPO_WALLET_ENC);
+}
+
+/**
+ * Get the address from a repo-local encrypted wallet without importing it.
+ */
+export function getRepoWalletAddress(passphrase: string, repoPath?: string): string {
+  const sourcePath = repoPath || REPO_WALLET_ENC;
+
+  if (!fs.existsSync(sourcePath)) {
+    throw new Error(`No encrypted wallet found at ${sourcePath}`);
+  }
+
+  const encrypted = fs.readFileSync(sourcePath, "utf-8");
+  const walletData = decryptWallet(encrypted, passphrase) as WalletData;
+  const account = privateKeyToAccount(walletData.privateKey);
+  return account.address;
 }

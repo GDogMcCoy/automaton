@@ -7,7 +7,14 @@
  * the heartbeat daemon + agent loop.
  */
 
-import { getWallet, getAutomatonDir } from "./identity/wallet.js";
+import {
+  getWallet,
+  getAutomatonDir,
+  exportWalletToRepo,
+  importWalletFromRepo,
+  repoWalletExists,
+  getRepoWalletPath,
+} from "./identity/wallet.js";
 import { provision, loadApiKeyFromConfig } from "./identity/provision.js";
 import { loadConfig, resolvePath, validateConfig } from "./config.js";
 import { createDatabase } from "./state/database.js";
@@ -56,19 +63,22 @@ Conway Automaton v${VERSION}
 Sovereign AI Agent Runtime
 
 Usage:
-  automaton --run          Start the automaton (first run triggers setup wizard)
-  automaton --setup        Re-run the interactive setup wizard
-  automaton --init         Initialize wallet and config directory
-  automaton --provision    Provision Conway API key via SIWE
-  automaton --status       Show current automaton status
-  automaton --version      Show version
-  automaton --help         Show this help
+  automaton --run              Start the automaton (first run triggers setup wizard)
+  automaton --setup            Re-run the interactive setup wizard
+  automaton --init             Initialize wallet and config directory
+  automaton --provision        Provision Conway API key via SIWE
+  automaton --status           Show current automaton status
+  automaton --wallet-export    Encrypt wallet and save to repo (.automaton/wallet.enc)
+  automaton --wallet-import    Decrypt wallet from repo into ~/.automaton/wallet.json
+  automaton --version          Show version
+  automaton --help             Show this help
 
 Environment:
-  CONWAY_API_URL           Conway API URL (default: https://api.conway.tech)
-  CONWAY_API_KEY           Conway API key (overrides config)
-  HEALTH_PORT              HTTP health/metrics port (default: 8080)
-  LOG_LEVEL                Logging level: debug, info, warn, error
+  CONWAY_API_URL                 Conway API URL (default: https://api.conway.tech)
+  CONWAY_API_KEY                 Conway API key (overrides config)
+  AUTOMATON_WALLET_PASSPHRASE    Passphrase for wallet encryption/decryption
+  HEALTH_PORT                    HTTP health/metrics port (default: 8080)
+  LOG_LEVEL                      Logging level: debug, info, warn, error
 `);
     process.exit(0);
   }
@@ -98,6 +108,45 @@ Environment:
 
   if (args.includes("--status")) {
     await showStatus();
+    process.exit(0);
+  }
+
+  if (args.includes("--wallet-export")) {
+    const passphrase = process.env.AUTOMATON_WALLET_PASSPHRASE;
+    if (!passphrase) {
+      console.error(
+        "Set AUTOMATON_WALLET_PASSPHRASE environment variable to encrypt the wallet.",
+      );
+      process.exit(1);
+    }
+    const address = exportWalletToRepo(passphrase);
+    console.log(
+      JSON.stringify({
+        exported: true,
+        address,
+        path: getRepoWalletPath(),
+        hint: "Commit .automaton/wallet.enc to git. On another machine, run --wallet-import with the same passphrase.",
+      }),
+    );
+    process.exit(0);
+  }
+
+  if (args.includes("--wallet-import")) {
+    const passphrase = process.env.AUTOMATON_WALLET_PASSPHRASE;
+    if (!passphrase) {
+      console.error(
+        "Set AUTOMATON_WALLET_PASSPHRASE environment variable to decrypt the wallet.",
+      );
+      process.exit(1);
+    }
+    if (!repoWalletExists()) {
+      console.error(
+        "No encrypted wallet found in repo. Run --wallet-export on the source machine first.",
+      );
+      process.exit(1);
+    }
+    const address = importWalletFromRepo(passphrase);
+    console.log(JSON.stringify({ imported: true, address }));
     process.exit(0);
   }
 
