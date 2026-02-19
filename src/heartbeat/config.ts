@@ -72,13 +72,15 @@ export function loadHeartbeatConfig(configPath?: string): HeartbeatConfig {
     const raw = fs.readFileSync(filePath, "utf-8");
     const parsed = YAML.parse(raw) || {};
 
-    const parsedEntries = (parsed.entries || []).map((e: any) => ({
-      name: e.name,
-      schedule: e.schedule,
-      task: e.task,
-      enabled: e.enabled !== false,
-      params: e.params,
-    })) as HeartbeatEntry[];
+    const parsedEntries = (parsed.entries || [])
+      .filter((e: any) => e && typeof e.name === "string" && e.name.length > 0)
+      .map((e: any) => ({
+        name: String(e.name).slice(0, 128),
+        schedule: typeof e.schedule === "string" ? e.schedule.slice(0, 128) : "",
+        task: typeof e.task === "string" ? e.task.slice(0, 128) : "",
+        enabled: e.enabled !== false,
+        params: typeof e.params === "object" && e.params !== null ? e.params : undefined,
+      })) as HeartbeatEntry[];
 
     const entries = mergeWithDefaults(parsedEntries);
 

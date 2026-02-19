@@ -82,6 +82,16 @@ export async function installMcpServer(
     return { success: false, error: "Self-modification is disabled." };
   }
 
+  // Validate MCP server name (alphanumeric + hyphens, max 64 chars)
+  if (!name || !/^[a-zA-Z0-9][a-zA-Z0-9\-]*$/.test(name) || name.length > 64) {
+    return { success: false, error: `Invalid MCP server name: "${name}". Must be 1-64 alphanumeric/hyphen chars.` };
+  }
+
+  // Validate command (must not contain shell metacharacters)
+  if (/[;&|`$()]/.test(command)) {
+    return { success: false, error: `MCP server command contains shell metacharacters: "${command}"` };
+  }
+
   // Record in database
   const tool: InstalledTool = {
     id: ulid(),

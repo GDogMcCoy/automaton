@@ -65,9 +65,15 @@ export async function provision(
   const { account } = await getWallet();
   const address = account.address;
 
+  // Validate API URL
+  if (!url.startsWith("https://") && !url.startsWith("http://localhost")) {
+    throw new Error("API URL must use HTTPS (or http://localhost for development)");
+  }
+
   // 2. Get nonce
   const nonceResp = await fetch(`${url}/v1/auth/nonce`, {
     method: "POST",
+    signal: AbortSignal.timeout(15_000),
   });
   if (!nonceResp.ok) {
     throw new Error(
@@ -97,6 +103,7 @@ export async function provision(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ message: messageString, signature }),
+    signal: AbortSignal.timeout(15_000),
   });
 
   if (!verifyResp.ok) {
@@ -117,6 +124,7 @@ export async function provision(
       Authorization: `Bearer ${access_token}`,
     },
     body: JSON.stringify({ name: "conway-automaton" }),
+    signal: AbortSignal.timeout(15_000),
   });
 
   if (!keyResp.ok) {
@@ -144,6 +152,11 @@ export async function registerParent(
   creatorAddress: string,
   apiUrl?: string,
 ): Promise<void> {
+  // Validate creator address format
+  if (!/^0x[0-9a-fA-F]{40}$/.test(creatorAddress)) {
+    throw new Error("Invalid creator address format (must be 0x + 40 hex chars)");
+  }
+
   const url = apiUrl || process.env.CONWAY_API_URL || DEFAULT_API_URL;
   const apiKey = loadApiKeyFromConfig();
   if (!apiKey) {
@@ -157,6 +170,7 @@ export async function registerParent(
       Authorization: apiKey,
     },
     body: JSON.stringify({ creatorAddress }),
+    signal: AbortSignal.timeout(15_000),
   });
 
   // Endpoint may not exist yet -- fail gracefully
