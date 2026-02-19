@@ -83,19 +83,59 @@ export function buildContextMessages(
 }
 
 /**
+ * Estimate token count for a string (rough heuristic: ~4 chars per token).
+ */
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
+/**
+ * Estimate total tokens in a set of turns.
+ */
+function estimateTurnTokens(turn: AgentTurn): number {
+  let tokens = estimateTokens(turn.thinking || "");
+  tokens += estimateTokens(turn.input || "");
+  for (const tc of turn.toolCalls) {
+    tokens += estimateTokens(tc.result || "");
+    tokens += estimateTokens(JSON.stringify(tc.arguments));
+  }
+  return tokens;
+}
+
+/**
  * Trim context to fit within limits.
- * Keeps the system prompt and most recent turns.
+ * Uses token estimation to stay within budget, not just turn count.
  */
 export function trimContext(
   turns: AgentTurn[],
   maxTurns: number = MAX_CONTEXT_TURNS,
+  maxTokens: number = 80000,
 ): AgentTurn[] {
   if (turns.length <= maxTurns) {
-    return turns;
+    // Check token budget even if under turn limit
+    let totalTokens = 0;
+    const result: AgentTurn[] = [];
+    // Work backwards from most recent
+    for (let i = turns.length - 1; i >= 0; i--) {
+      const turnTokens = estimateTurnTokens(turns[i]);
+      if (totalTokens + turnTokens > maxTokens && result.length > 0) break;
+      totalTokens += turnTokens;
+      result.unshift(turns[i]);
+    }
+    return result;
   }
 
-  // Keep the most recent turns
-  return turns.slice(-maxTurns);
+  // Keep the most recent turns within budget
+  const recent = turns.slice(-maxTurns);
+  let totalTokens = 0;
+  const result: AgentTurn[] = [];
+  for (let i = recent.length - 1; i >= 0; i--) {
+    const turnTokens = estimateTurnTokens(recent[i]);
+    if (totalTokens + turnTokens > maxTokens && result.length > 0) break;
+    totalTokens += turnTokens;
+    result.unshift(recent[i]);
+  }
+  return result;
 }
 
 /**

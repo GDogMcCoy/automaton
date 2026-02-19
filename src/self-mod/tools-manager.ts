@@ -8,6 +8,7 @@ import type {
   ConwayClient,
   AutomatonDatabase,
   InstalledTool,
+  AutomatonConfig,
 } from "../types.js";
 import { logModification } from "./audit-log.js";
 import { ulid } from "ulid";
@@ -19,7 +20,12 @@ export async function installNpmPackage(
   conway: ConwayClient,
   db: AutomatonDatabase,
   packageName: string,
+  config?: AutomatonConfig,
 ): Promise<{ success: boolean; error?: string }> {
+  if (config?.selfModMode === "disabled") {
+    return { success: false, error: "Self-modification is disabled." };
+  }
+
   // Sanitize package name (prevent command injection)
   if (!/^[@a-zA-Z0-9._/-]+$/.test(packageName)) {
     return {
@@ -70,7 +76,12 @@ export async function installMcpServer(
   command: string,
   args?: string[],
   env?: Record<string, string>,
+  config?: AutomatonConfig,
 ): Promise<{ success: boolean; error?: string }> {
+  if (config?.selfModMode === "disabled") {
+    return { success: false, error: "Self-modification is disabled." };
+  }
+
   // Record in database
   const tool: InstalledTool = {
     id: ulid(),

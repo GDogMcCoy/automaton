@@ -14,6 +14,8 @@ import type {
   TokenUsage,
   InferenceToolDefinition,
 } from "../types.js";
+import { withRetry, RetryPresets } from "../utils/retry.js";
+import { NetworkError } from "../utils/error-handler.js";
 
 interface InferenceClientOptions {
   apiUrl: string;
@@ -62,23 +64,36 @@ export function createInferenceClient(
       body.tool_choice = "auto";
     }
 
-    const resp = await fetch(`${apiUrl}/v1/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: apiKey,
+    const data = await withRetry(
+      async () => {
+        const resp = await fetch(`${apiUrl}/v1/chat/completions`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: apiKey,
+          },
+          body: JSON.stringify(body),
+        });
+
+        if (!resp.ok) {
+          const text = await resp.text();
+          if (resp.status >= 500 || resp.status === 429) {
+            throw new NetworkError(
+              `Inference error: ${resp.status}: ${text}`,
+              resp.status,
+            );
+          }
+          throw new Error(`Inference error: ${resp.status}: ${text}`);
+        }
+
+        return resp.json() as Promise<any>;
       },
-      body: JSON.stringify(body),
-    });
-
-    if (!resp.ok) {
-      const text = await resp.text();
-      throw new Error(
-        `Inference error: ${resp.status}: ${text}`,
-      );
-    }
-
-    const data = await resp.json() as any;
+      {
+        ...RetryPresets.inference,
+        circuitBreakerName: "inference-api",
+        retryableErrors: ["ECONNRESET", "ETIMEDOUT", "NETWORK_ERROR", "429", "500", "502", "503"],
+      },
+    );
     const choice = data.choices?.[0];
 
     if (!choice) {

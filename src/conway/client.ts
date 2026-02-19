@@ -19,6 +19,8 @@ import type {
   DnsRecord,
   ModelInfo,
 } from "../types.js";
+import { withRetry, RetryPresets } from "../utils/retry.js";
+import { NetworkError, safeJsonParse } from "../utils/error-handler.js";
 
 interface ConwayClientOptions {
   apiUrl: string;
@@ -36,27 +38,42 @@ export function createConwayClient(
     path: string,
     body?: unknown,
   ): Promise<any> {
-    const resp = await fetch(`${apiUrl}${path}`, {
-      method,
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: apiKey,
+    return withRetry(
+      async () => {
+        const resp = await fetch(`${apiUrl}${path}`, {
+          method,
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: apiKey,
+          },
+          body: body ? JSON.stringify(body) : undefined,
+        });
+
+        if (!resp.ok) {
+          const text = await resp.text();
+          if (resp.status >= 500) {
+            throw new NetworkError(
+              `Conway API error: ${method} ${path} -> ${resp.status}: ${text}`,
+              resp.status,
+            );
+          }
+          throw new Error(
+            `Conway API error: ${method} ${path} -> ${resp.status}: ${text}`,
+          );
+        }
+
+        const contentType = resp.headers.get("content-type");
+        if (contentType?.includes("application/json")) {
+          return resp.json();
+        }
+        return resp.text();
       },
-      body: body ? JSON.stringify(body) : undefined,
-    });
-
-    if (!resp.ok) {
-      const text = await resp.text();
-      throw new Error(
-        `Conway API error: ${method} ${path} -> ${resp.status}: ${text}`,
-      );
-    }
-
-    const contentType = resp.headers.get("content-type");
-    if (contentType?.includes("application/json")) {
-      return resp.json();
-    }
-    return resp.text();
+      {
+        ...RetryPresets.network,
+        circuitBreakerName: "conway-api",
+        retryableErrors: ["ECONNRESET", "ETIMEDOUT", "NETWORK_ERROR", "500", "502", "503"],
+      },
+    );
   }
 
   // ─── Sandbox Operations (own sandbox) ────────────────────────

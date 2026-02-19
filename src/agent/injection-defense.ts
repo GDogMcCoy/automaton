@@ -253,7 +253,7 @@ function computeThreatLevel(checks: InjectionCheck[]): ThreatLevel {
 
 // ─── Escaping ──────────────────────────────────────────────────
 
-function escapePromptBoundaries(text: string): string {
+export function escapePromptBoundaries(text: string): string {
   return text
     .replace(/<\/?system>/gi, "[system-tag-removed]")
     .replace(/<\/?prompt>/gi, "[prompt-tag-removed]")
@@ -266,4 +266,44 @@ function escapePromptBoundaries(text: string): string {
     .replace(/\u200c/g, "")
     .replace(/\u200d/g, "")
     .replace(/\ufeff/g, "");
+}
+
+// ─── Output Validation ──────────────────────────────────────────
+
+/**
+ * Validate tool output before including it in the context.
+ * Prevents tool results from injecting instructions.
+ */
+export function sanitizeToolOutput(
+  output: string,
+  toolName: string,
+  maxLength: number = 50000,
+): string {
+  // Truncate excessively long outputs
+  let sanitized = output.length > maxLength
+    ? output.slice(0, maxLength) + `\n... [truncated: ${output.length} chars total]`
+    : output;
+
+  // Strip any prompt boundary manipulation from tool output
+  sanitized = escapePromptBoundaries(sanitized);
+
+  return sanitized;
+}
+
+/**
+ * Rate limiter for message processing.
+ * Prevents flooding attacks via the social inbox.
+ */
+export function checkMessageRateLimit(
+  messageCount: number,
+  windowMs: number = 60000,
+  maxMessages: number = 20,
+): { allowed: boolean; reason?: string } {
+  if (messageCount > maxMessages) {
+    return {
+      allowed: false,
+      reason: `Rate limit exceeded: ${messageCount} messages in ${windowMs / 1000}s window (max: ${maxMessages})`,
+    };
+  }
+  return { allowed: true };
 }

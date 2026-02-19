@@ -26,6 +26,13 @@ const CHAINS: Record<string, any> = {
 };
 type NetworkId = keyof typeof USDC_ADDRESSES;
 
+// Spending limits to prevent drain attacks
+const MAX_SINGLE_PAYMENT_USDC = 10; // Max $10 USDC per transaction
+const MAX_DAILY_SPENDING_USDC = 100; // Max $100 USDC per day
+
+// Track daily spending (resets when day changes)
+let dailySpendingTracker = { date: "", totalUsdc: 0 };
+
 const BALANCE_OF_ABI = [
   {
     inputs: [{ name: "account", type: "address" }],
@@ -292,6 +299,29 @@ export async function x402Fetch(
       };
     }
 
+    // Check spending limits
+    const amountUsdc = Number(parseMaxAmountRequired(parsed.requirement.maxAmountRequired, parsed.x402Version)) / 1_000_000;
+    if (amountUsdc > MAX_SINGLE_PAYMENT_USDC) {
+      return {
+        success: false,
+        error: `Payment of ${amountUsdc} USDC exceeds single transaction limit of ${MAX_SINGLE_PAYMENT_USDC} USDC`,
+        status: 402,
+      };
+    }
+
+    // Track daily spending
+    const today = new Date().toISOString().slice(0, 10);
+    if (dailySpendingTracker.date !== today) {
+      dailySpendingTracker = { date: today, totalUsdc: 0 };
+    }
+    if (dailySpendingTracker.totalUsdc + amountUsdc > MAX_DAILY_SPENDING_USDC) {
+      return {
+        success: false,
+        error: `Daily spending limit of ${MAX_DAILY_SPENDING_USDC} USDC would be exceeded (spent today: ${dailySpendingTracker.totalUsdc.toFixed(2)} USDC)`,
+        status: 402,
+      };
+    }
+
     // Sign payment
     let payment: any;
     try {
@@ -324,6 +354,12 @@ export async function x402Fetch(
     });
 
     const data = await paidResp.json().catch(() => paidResp.text());
+
+    // Track spending on success
+    if (paidResp.ok) {
+      dailySpendingTracker.totalUsdc += amountUsdc;
+    }
+
     return { success: paidResp.ok, response: data, status: paidResp.status };
   } catch (err: any) {
     return { success: false, error: err.message };

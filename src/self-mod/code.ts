@@ -18,6 +18,7 @@ import path from "path";
 import type {
   ConwayClient,
   AutomatonDatabase,
+  AutomatonConfig,
 } from "../types.js";
 import { logModification } from "./audit-log.js";
 
@@ -191,7 +192,16 @@ export async function editFile(
   filePath: string,
   newContent: string,
   reason: string,
+  config?: AutomatonConfig,
 ): Promise<{ success: boolean; error?: string }> {
+  // Check self-modification mode
+  if (config?.selfModMode === "disabled") {
+    return {
+      success: false,
+      error: "Self-modification is disabled. Set selfModMode to 'gated' or 'full' in config to enable.",
+    };
+  }
+
   // 1. Protected file check
   if (isProtectedFile(filePath)) {
     return {

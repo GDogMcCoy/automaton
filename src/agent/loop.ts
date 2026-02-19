@@ -285,12 +285,24 @@ export async function runAgentLoop(
       consecutiveErrors = 0;
     } catch (err: any) {
       consecutiveErrors++;
-      log(config, `[ERROR] Turn failed: ${err.message}`);
+      log(config, `[ERROR] Turn failed (${consecutiveErrors}/${MAX_CONSECUTIVE_ERRORS}): ${err.message}`);
+
+      // Persist error for diagnostics
+      try {
+        db.setKV("last_loop_error", JSON.stringify({
+          message: err.message,
+          stack: err.stack?.slice(0, 500),
+          consecutiveErrors,
+          timestamp: new Date().toISOString(),
+        }));
+      } catch {
+        // DB write failed - nothing we can do
+      }
 
       if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
         log(
           config,
-          `[FATAL] ${MAX_CONSECUTIVE_ERRORS} consecutive errors. Sleeping.`,
+          `[FATAL] ${MAX_CONSECUTIVE_ERRORS} consecutive errors. Sleeping for 5 minutes.`,
         );
         db.setAgentState("sleeping");
         onStateChange?.("sleeping");
@@ -299,6 +311,10 @@ export async function runAgentLoop(
           new Date(Date.now() + 300_000).toISOString(),
         );
         running = false;
+      } else {
+        // Brief backoff before retry
+        const backoffMs = Math.min(1000 * Math.pow(2, consecutiveErrors), 30000);
+        await new Promise(resolve => setTimeout(resolve, backoffMs));
       }
     }
   }

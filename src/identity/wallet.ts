@@ -39,6 +39,12 @@ export async function getWallet(): Promise<{
   }
 
   if (fs.existsSync(WALLET_FILE)) {
+    // Verify file permissions
+    const permCheck = verifyWalletPermissions();
+    if (!permCheck.ok) {
+      console.warn(`[WALLET] Warning: ${permCheck.error}`);
+    }
+
     const walletData: WalletData = JSON.parse(
       fs.readFileSync(WALLET_FILE, "utf-8"),
     );
@@ -92,4 +98,37 @@ export function loadWalletAccount(): PrivateKeyAccount | null {
 
 export function walletExists(): boolean {
   return fs.existsSync(WALLET_FILE);
+}
+
+/**
+ * Verify wallet file has correct permissions (owner read/write only).
+ * Returns true if permissions are correct, false otherwise.
+ */
+export function verifyWalletPermissions(): { ok: boolean; error?: string } {
+  if (!fs.existsSync(WALLET_FILE)) {
+    return { ok: false, error: "Wallet file does not exist" };
+  }
+
+  try {
+    const stats = fs.statSync(WALLET_FILE);
+    const mode = stats.mode & 0o777;
+
+    // Should be 0o600 (owner read/write only)
+    if (mode !== 0o600) {
+      // Try to fix permissions
+      try {
+        fs.chmodSync(WALLET_FILE, 0o600);
+        return { ok: true };
+      } catch {
+        return {
+          ok: false,
+          error: `Wallet file has insecure permissions: ${mode.toString(8)} (expected: 600)`,
+        };
+      }
+    }
+
+    return { ok: true };
+  } catch (err: any) {
+    return { ok: false, error: `Cannot check wallet permissions: ${err.message}` };
+  }
 }

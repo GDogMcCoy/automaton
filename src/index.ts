@@ -249,16 +249,39 @@ async function run(): Promise<void> {
   console.log(`[${new Date().toISOString()}] Heartbeat daemon started.`);
 
   // Handle graceful shutdown
-  const shutdown = () => {
-    console.log(`[${new Date().toISOString()}] Shutting down...`);
-    heartbeat.stop();
-    db.setAgentState("sleeping");
-    db.close();
+  let isShuttingDown = false;
+  const shutdown = (signal: string) => {
+    if (isShuttingDown) return; // Prevent double-shutdown
+    isShuttingDown = true;
+    console.log(`[${new Date().toISOString()}] Received ${signal}. Shutting down gracefully...`);
+    try {
+      heartbeat.stop();
+      db.setAgentState("sleeping");
+      db.setKV("last_shutdown", JSON.stringify({
+        signal,
+        timestamp: new Date().toISOString(),
+        reason: "graceful",
+      }));
+      db.close();
+    } catch (err: any) {
+      console.error(`[${new Date().toISOString()}] Error during shutdown: ${err.message}`);
+    }
     process.exit(0);
   };
 
-  process.on("SIGTERM", shutdown);
-  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
+  process.on("uncaughtException", (err) => {
+    console.error(`[${new Date().toISOString()}] Uncaught exception: ${err.message}`);
+    try {
+      db.setKV("last_fatal_error", JSON.stringify({
+        message: err.message,
+        stack: err.stack?.slice(0, 1000),
+        timestamp: new Date().toISOString(),
+      }));
+    } catch {}
+    shutdown("uncaughtException");
+  });
 
   // ─── Main Run Loop ──────────────────────────────────────────
   // The automaton alternates between running and sleeping.

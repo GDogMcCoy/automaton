@@ -25,6 +25,7 @@ import type {
   InboxMessage,
 } from "../types.js";
 import { SCHEMA_VERSION, CREATE_TABLES, MIGRATION_V2, MIGRATION_V3 } from "./schema.js";
+import { safeJsonParse } from "../utils/error-handler.js";
 
 export function createDatabase(dbPath: string): AutomatonDatabase {
   // Ensure directory exists
@@ -503,8 +504,8 @@ function deserializeTurn(row: any): AgentTurn {
     input: row.input ?? undefined,
     inputSource: row.input_source ?? undefined,
     thinking: row.thinking,
-    toolCalls: JSON.parse(row.tool_calls || "[]"),
-    tokenUsage: JSON.parse(row.token_usage || "{}"),
+    toolCalls: safeJsonParse(row.tool_calls || "[]", []),
+    tokenUsage: safeJsonParse(row.token_usage || "{}", { promptTokens: 0, completionTokens: 0, totalTokens: 0 }),
     costCents: row.cost_cents,
   };
 }
@@ -513,7 +514,7 @@ function deserializeToolCall(row: any): ToolCallResult {
   return {
     id: row.id,
     name: row.name,
-    arguments: JSON.parse(row.arguments || "{}"),
+    arguments: safeJsonParse(row.arguments || "{}", {}),
     result: row.result,
     durationMs: row.duration_ms,
     error: row.error ?? undefined,
@@ -528,7 +529,7 @@ function deserializeHeartbeatEntry(row: any): HeartbeatEntry {
     enabled: !!row.enabled,
     lastRun: row.last_run ?? undefined,
     nextRun: row.next_run ?? undefined,
-    params: JSON.parse(row.params || "{}"),
+    params: safeJsonParse(row.params || "{}", {}),
   };
 }
 
@@ -548,7 +549,7 @@ function deserializeInstalledTool(row: any): InstalledTool {
     id: row.id,
     name: row.name,
     type: row.type,
-    config: JSON.parse(row.config || "{}"),
+    config: safeJsonParse(row.config || "{}", {}),
     installedAt: row.installed_at,
     enabled: !!row.enabled,
   };
@@ -571,7 +572,7 @@ function deserializeSkill(row: any): Skill {
     name: row.name,
     description: row.description,
     autoActivate: !!row.auto_activate,
-    requires: JSON.parse(row.requires || "{}"),
+    requires: safeJsonParse(row.requires || "{}", {}),
     instructions: row.instructions,
     source: row.source,
     path: row.path,
