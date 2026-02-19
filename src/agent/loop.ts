@@ -165,6 +165,7 @@ export async function runAgentLoop(
     try {
       // Wrap the entire turn in a timeout so a single stuck inference
       // or tool call cannot block the loop forever.
+      let turnTimeoutId: ReturnType<typeof setTimeout> | undefined;
       await Promise.race([
         (async () => {
       // Check if we should be sleeping
@@ -257,10 +258,12 @@ export async function runAgentLoop(
         tools: toolsToInferenceFormat(tools),
       });
 
-      // Record token usage
+      // Record token usage and cost
       const totalTokens =
         response.usage.promptTokens + response.usage.completionTokens;
       loopMetrics.histogram("loop.inference.tokens", totalTokens);
+      const costCents = estimateCostCents(response.usage, inference.getDefaultModel());
+      loopMetrics.histogram("loop.cost_cents", costCents);
 
       const turn: AgentTurn = {
         id: ulid(),
@@ -396,13 +399,16 @@ export async function runAgentLoop(
       consecutiveErrors = 0;
         })(),
         // Timeout sentinel -- rejects if the turn takes too long
-        new Promise<never>((_, reject) =>
-          setTimeout(
+        new Promise<never>((_, reject) => {
+          turnTimeoutId = setTimeout(
             () => reject(new Error(`Turn timed out after ${TURN_TIMEOUT_MS}ms`)),
             TURN_TIMEOUT_MS,
-          ),
-        ),
-      ]);
+          );
+        }),
+      ]).finally(() => {
+        // Clear the timeout timer to prevent leaks on normal completion
+        if (turnTimeoutId) clearTimeout(turnTimeoutId);
+      });
     } catch (err: any) {
       consecutiveErrors++;
       loopMetrics.counter("loop.turns.errors");

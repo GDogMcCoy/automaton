@@ -47,18 +47,21 @@ export function createConwayClient(
             Authorization: apiKey,
           },
           body: body ? JSON.stringify(body) : undefined,
+          signal: AbortSignal.timeout(120_000), // 2-minute request timeout
         });
 
         if (!resp.ok) {
           const text = await resp.text();
+          // Truncate error body to prevent info leaks and log bloat
+          const truncatedText = text.slice(0, 500);
           if (resp.status >= 500) {
             throw new NetworkError(
-              `Conway API error: ${method} ${path} -> ${resp.status}: ${text}`,
+              `Conway API error: ${method} ${path} -> ${resp.status}: ${truncatedText}`,
               resp.status,
             );
           }
           throw new Error(
-            `Conway API error: ${method} ${path} -> ${resp.status}: ${text}`,
+            `Conway API error: ${method} ${path} -> ${resp.status}: ${truncatedText}`,
           );
         }
 

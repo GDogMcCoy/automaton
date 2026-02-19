@@ -270,7 +270,13 @@ export function createDatabase(dbPath: string): AutomatonDatabase {
     return row?.value;
   };
 
+  // Max KV value size: 1MB to prevent disk exhaustion
+  const MAX_KV_VALUE_SIZE = 1_000_000;
+
   const setKV = (key: string, value: string): void => {
+    if (value.length > MAX_KV_VALUE_SIZE) {
+      throw new Error(`KV value for key "${key}" exceeds max size (${value.length} > ${MAX_KV_VALUE_SIZE})`);
+    }
     db.prepare(
       "INSERT OR REPLACE INTO kv (key, value, updated_at) VALUES (?, ?, datetime('now'))",
     ).run(key, value);

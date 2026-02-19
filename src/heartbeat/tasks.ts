@@ -32,7 +32,16 @@ export type HeartbeatTaskFn = (
  */
 export const BUILTIN_TASKS: Record<string, HeartbeatTaskFn> = {
   heartbeat_ping: async (ctx) => {
-    const credits = await ctx.conway.getCreditsBalance();
+    let credits = 0;
+    try {
+      credits = await ctx.conway.getCreditsBalance();
+    } catch {
+      // Network failure - use last known value or 0
+      const lastPing = ctx.db.getKV("last_heartbeat_ping");
+      if (lastPing) {
+        try { credits = JSON.parse(lastPing).creditsCents || 0; } catch {}
+      }
+    }
     const state = ctx.db.getAgentState();
     const startTime =
       ctx.db.getKV("start_time") || new Date().toISOString();
@@ -77,7 +86,13 @@ export const BUILTIN_TASKS: Record<string, HeartbeatTaskFn> = {
   },
 
   check_credits: async (ctx) => {
-    const credits = await ctx.conway.getCreditsBalance();
+    let credits: number;
+    try {
+      credits = await ctx.conway.getCreditsBalance();
+    } catch {
+      return { shouldWake: false }; // Network failure, skip this check
+    }
+    if (!Number.isFinite(credits) || credits < 0) credits = 0;
     const tier = getSurvivalTier(credits);
 
     ctx.db.setKV("last_credit_check", JSON.stringify({
@@ -101,7 +116,13 @@ export const BUILTIN_TASKS: Record<string, HeartbeatTaskFn> = {
   },
 
   check_usdc_balance: async (ctx) => {
-    const balance = await getUsdcBalance(ctx.identity.address);
+    let balance: number;
+    try {
+      balance = await getUsdcBalance(ctx.identity.address);
+    } catch {
+      return { shouldWake: false }; // Network failure, skip
+    }
+    if (!Number.isFinite(balance) || balance < 0) balance = 0;
 
     ctx.db.setKV("last_usdc_check", JSON.stringify({
       balance,
@@ -109,7 +130,13 @@ export const BUILTIN_TASKS: Record<string, HeartbeatTaskFn> = {
     }));
 
     // If we have USDC but low credits, wake up to potentially convert
-    const credits = await ctx.conway.getCreditsBalance();
+    let credits: number;
+    try {
+      credits = await ctx.conway.getCreditsBalance();
+    } catch {
+      return { shouldWake: false };
+    }
+    if (!Number.isFinite(credits) || credits < 0) credits = 0;
     if (balance > 0.5 && credits < 500) {
       return {
         shouldWake: true,
@@ -124,13 +151,20 @@ export const BUILTIN_TASKS: Record<string, HeartbeatTaskFn> = {
     if (!ctx.social) return { shouldWake: false };
 
     const cursor = ctx.db.getKV("social_inbox_cursor") || undefined;
-    const { messages, nextCursor } = await ctx.social.poll(cursor);
+    let pollResult;
+    try {
+      pollResult = await ctx.social.poll(cursor, 50); // Cap at 50 messages per check
+    } catch {
+      return { shouldWake: false };
+    }
+    const { messages, nextCursor } = pollResult;
 
     if (messages.length === 0) return { shouldWake: false };
 
-    // Persist to inbox_messages table for deduplication
+    // Persist to inbox_messages table for deduplication (cap at 50 per batch)
     let newCount = 0;
-    for (const msg of messages) {
+    const maxBatch = 50;
+    for (const msg of messages.slice(0, maxBatch)) {
       const existing = ctx.db.getKV(`inbox_seen_${msg.id}`);
       if (!existing) {
         ctx.db.insertInboxMessage(msg);

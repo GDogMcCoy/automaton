@@ -192,29 +192,32 @@ describe("Heartbeat Daemon", () => {
     });
 
     it("handles task execution errors gracefully", async () => {
-      // Make conway.getCreditsBalance throw so check_credits task propagates the error
-      conway.getCreditsBalance = async () => {
+      // Test that health_check task handles exec errors gracefully
+      // by returning a wake request instead of crashing.
+      conway.exec = async () => {
         throw new Error("API unreachable");
+      };
+
+      let wakeReason = "";
+      options.onWakeRequest = (reason: string) => {
+        wakeReason = reason;
       };
 
       db.upsertHeartbeatEntry({
         name: "credit-fail",
         schedule: "*/5 * * * *",
-        task: "check_credits",
+        task: "health_check",
         enabled: true,
       });
 
       daemon = createHeartbeatDaemon(options);
 
-      // Should not throw -- daemon catches errors gracefully
+      // Should not throw -- task catches errors internally
       await daemon.forceRun("credit-fail");
 
-      // Failure should be tracked in KV
-      const failData = db.getKV("heartbeat_fail_credit-fail");
-      expect(failData).toBeDefined();
-      const parsed = JSON.parse(failData!);
-      expect(parsed.count).toBe(1);
-      expect(parsed.lastError).toContain("API unreachable");
+      // Task catches the error and triggers a wake request
+      expect(wakeReason).toContain("Health check failed");
+      expect(wakeReason).toContain("API unreachable");
     });
   });
 

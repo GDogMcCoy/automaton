@@ -73,17 +73,20 @@ export function createInferenceClient(
             Authorization: apiKey,
           },
           body: JSON.stringify(body),
+          signal: AbortSignal.timeout(180_000), // 3-minute inference timeout
         });
 
         if (!resp.ok) {
           const text = await resp.text();
+          // Truncate error text to prevent info leaks and log bloat
+          const truncatedText = text.slice(0, 500);
           if (resp.status >= 500 || resp.status === 429) {
             throw new NetworkError(
-              `Inference error: ${resp.status}: ${text}`,
+              `Inference error: ${resp.status}: ${truncatedText}`,
               resp.status,
             );
           }
-          throw new Error(`Inference error: ${resp.status}: ${text}`);
+          throw new Error(`Inference error: ${resp.status}: ${truncatedText}`);
         }
 
         return resp.json() as Promise<any>;
@@ -107,10 +110,13 @@ export function createInferenceClient(
       totalTokens: data.usage?.total_tokens || 0,
     };
 
+    // Validate tool_calls is actually an array before processing
+    const rawToolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
     const toolCalls: InferenceToolCall[] | undefined =
-      message.tool_calls
-        ?.filter((tc: any) => tc?.function?.name) // skip malformed tool calls
-        .map((tc: any) => ({
+      rawToolCalls.length > 0
+        ? rawToolCalls
+          .filter((tc: any) => tc?.function?.name) // skip malformed tool calls
+          .map((tc: any) => ({
           id: tc.id || "",
           type: "function" as const,
           function: {
@@ -121,7 +127,8 @@ export function createInferenceClient(
                 ? tc.function.arguments
                 : JSON.stringify(tc.function.arguments || {}),
           },
-        }));
+        }))
+        : undefined;
 
     return {
       id: data.id || "",

@@ -155,6 +155,7 @@ export const CREATE_TABLES = `
   CREATE INDEX IF NOT EXISTS idx_skills_enabled ON skills(enabled);
   CREATE INDEX IF NOT EXISTS idx_children_status ON children(status);
   CREATE INDEX IF NOT EXISTS idx_reputation_to ON reputation(to_agent);
+  CREATE INDEX IF NOT EXISTS idx_reputation_from ON reputation(from_agent);
 
   -- Inbox messages table
   CREATE TABLE IF NOT EXISTS inbox_messages (
@@ -171,6 +172,8 @@ export const CREATE_TABLES = `
 
   CREATE INDEX IF NOT EXISTS idx_inbox_processed_at
     ON inbox_messages(processed_at);
+  CREATE INDEX IF NOT EXISTS idx_inbox_from_address
+    ON inbox_messages(from_address);
 `;
 
 export const MIGRATION_V3 = `
