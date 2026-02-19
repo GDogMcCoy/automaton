@@ -1,0 +1,38 @@
+version: "3.8"
+
+services:
+  automaton:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: automaton
+    restart: unless-stopped
+    volumes:
+      - automaton-data:/app/data
+      - automaton-logs:/app/logs
+    environment:
+      - NODE_ENV=production
+      - AUTOMATON_DATA_DIR=/app/data
+    env_file:
+      - ../.env
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2.0"
+        reservations:
+          memory: 256M
+
+volumes:
+  automaton-data:
+    driver: local
+  automaton-logs:
+    driver: local

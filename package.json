@@ -52,13 +52,14 @@
     "cron-parser": "4.9.0",
     "gray-matter": "4.0.3",
     "ora": "8.2.0",
-    "siwe": "2.3.2",
     "simple-git": "3.30.0",
+    "siwe": "2.3.2",
     "ulid": "2.4.0",
     "viem": "2.45.3",
     "yaml": "2.8.2"
   },
   "devDependencies": {
+    "@rollup/rollup-linux-x64-gnu": "4.57.1",
     "@types/better-sqlite3": "7.6.13",
     "@types/node": "20.19.33",
     "tsx": "4.21.0",

@@ -15,6 +15,7 @@
 
 import fs from "fs";
 import path from "path";
+import crypto from "crypto";
 import type {
   ConwayClient,
   AutomatonDatabase,
@@ -79,6 +80,29 @@ const BLOCKED_DIRECTORY_PATTERNS: readonly string[] = Object.freeze([
   "/proc",
   "/sys",
 ]);
+
+/**
+ * Verify the constitution file hasn't been tampered with.
+ * Returns the SHA-256 hash of the current constitution.
+ */
+export function getConstitutionHash(): string | null {
+  const locations = [
+    path.join(process.env.HOME || "/root", ".automaton", "constitution.md"),
+    path.join(process.cwd(), "constitution.md"),
+  ];
+
+  for (const loc of locations) {
+    try {
+      if (fs.existsSync(loc)) {
+        const content = fs.readFileSync(loc, "utf-8");
+        return crypto.createHash("sha256").update(content).digest("hex");
+      }
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
 
 /**
  * Maximum number of self-modifications per hour.

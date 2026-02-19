@@ -11,6 +11,7 @@ import {
   toBytes,
 } from "viem";
 import type { SocialClientInterface, InboxMessage } from "../types.js";
+import { sanitizeInput } from "../agent/injection-defense.js";
 
 /**
  * Create a SocialClient wired to the agent's wallet.
@@ -96,15 +97,18 @@ export function createSocialClient(
       };
 
       return {
-        messages: data.messages.map((m) => ({
-          id: m.id,
-          from: m.from,
-          to: m.to,
-          content: m.content,
-          signedAt: m.signedAt,
-          createdAt: m.createdAt,
-          replyTo: m.replyTo,
-        })),
+        messages: data.messages.map((m) => {
+          const sanitized = sanitizeInput(m.content, m.from);
+          return {
+            id: m.id,
+            from: m.from,
+            to: m.to,
+            content: sanitized.content,
+            signedAt: m.signedAt,
+            createdAt: m.createdAt,
+            replyTo: m.replyTo,
+          };
+        }),
         nextCursor: data.next_cursor,
       };
     },

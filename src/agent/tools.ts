@@ -93,6 +93,25 @@ export function createBuiltinTools(sandboxId: string): AutomatonTool[] {
         const forbidden = isForbiddenCommand(command, ctx.identity.sandboxId);
         if (forbidden) return forbidden;
 
+        // Check for dangerous commands
+        const BLOCKED_COMMANDS = [
+          /\brm\s+-rf\s+\/(?!\w)/,  // rm -rf / (but allow rm -rf /tmp/...)
+          /\bmkfs\b/,
+          /\bdd\s+if=.*of=\/dev/,
+          /\b:\(\)\s*\{\s*:\|:&\s*\}\s*;/,  // fork bomb
+          /\bshutdown\b/,
+          /\breboot\b/,
+          /\bkill\s+-9\s+1\b/,
+          /\bkillall\b.*\bnode\b/,
+        ];
+
+        const cmdStr = args.command as string;
+        for (const pattern of BLOCKED_COMMANDS) {
+          if (pattern.test(cmdStr)) {
+            return `BLOCKED: Command matches dangerous pattern. This is a safety guard.`;
+          }
+        }
+
         const result = await ctx.conway.exec(
           command,
           (args.timeout as number) || 30000,

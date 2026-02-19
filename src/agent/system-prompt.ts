@@ -187,6 +187,21 @@ Your sandbox ID is ${identity.sandboxId}.`,
   // Layer 6: Operational Context
   sections.push(OPERATIONAL_CONTEXT);
 
+  // Layer 6b: Security Posture
+  const securityLines: string[] = [
+    `--- SECURITY POSTURE ---`,
+    `Self-modification mode: ${config.selfModMode}`,
+    `Replication: ${config.replicationEnabled ? "enabled" : "DISABLED"}`,
+  ];
+  if (config.selfModMode === "disabled") {
+    securityLines.push(`NOTE: Self-modification is disabled. You cannot edit your own code or install packages.`);
+  }
+  if (!config.replicationEnabled) {
+    securityLines.push(`NOTE: Replication is disabled. spawn_child, fund_child, check_child_status tools will not work.`);
+  }
+  securityLines.push(`--- END SECURITY POSTURE ---`);
+  sections.push(securityLines.join("\n"));
+
   // Layer 7: Dynamic Context
   const turnCount = db.getTurnCount();
   const recentMods = db.getRecentModifications(5);

@@ -451,6 +451,19 @@ export function createDatabase(dbPath: string): AutomatonDatabase {
     db.close();
   };
 
+  const integrityCheck = (): { ok: boolean; error?: string } => {
+    try {
+      const result = db.pragma("integrity_check") as { integrity_check: string }[];
+      const status = result[0]?.integrity_check;
+      if (status === "ok") {
+        return { ok: true };
+      }
+      return { ok: false, error: `Integrity check failed: ${status}` };
+    } catch (err: any) {
+      return { ok: false, error: `Integrity check error: ${err.message}` };
+    }
+  };
+
   return {
     getIdentity,
     setIdentity,
@@ -491,6 +504,7 @@ export function createDatabase(dbPath: string): AutomatonDatabase {
     getAgentState,
     setAgentState,
     close,
+    integrityCheck,
   };
 }
 

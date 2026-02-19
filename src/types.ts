@@ -508,6 +508,9 @@ export interface AutomatonDatabase {
   setAgentState(state: AgentState): void;
 
   close(): void;
+
+  // Diagnostics
+  integrityCheck(): { ok: boolean; error?: string };
 }
 
 export interface InstalledTool {

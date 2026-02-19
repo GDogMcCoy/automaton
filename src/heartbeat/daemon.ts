@@ -101,6 +101,20 @@ export function createHeartbeatDaemon(
       console.error(
         `[HEARTBEAT] Task '${entry.name}' failed: ${err.message}`,
       );
+
+      // Track task failures for diagnostics
+      try {
+        const failKey = `heartbeat_fail_${entry.name}`;
+        const existing = db.getKV(failKey);
+        const failCount = existing ? JSON.parse(existing).count + 1 : 1;
+        db.setKV(failKey, JSON.stringify({
+          count: failCount,
+          lastError: err.message,
+          lastFailure: new Date().toISOString(),
+        }));
+      } catch {
+        // Don't let tracking failures crash the heartbeat
+      }
     }
   }
 
