@@ -14,6 +14,8 @@ import { createDatabase } from "./state/database.js";
 import { createConwayClient } from "./conway/client.js";
 import { createInferenceClient } from "./conway/inference.js";
 import { createMultiProviderInference, buildProviderList } from "./conway/multi-provider.js";
+import { createSelfHostedClient } from "./conway/self-hosted.js";
+import { createComputeProvider } from "./compute/index.js";
 import { createHeartbeatDaemon } from "./heartbeat/daemon.js";
 import {
   loadHeartbeatConfig,
@@ -186,12 +188,13 @@ async function run(): Promise<void> {
 
   // Load wallet — prefer secrets manager, then config
   const { account } = await getWallet();
-  const apiKey =
+  const apiKey: string =
     loadSecret("CONWAY_API_KEY") ||
     config.conwayApiKey ||
-    loadApiKeyFromConfig();
-  if (!apiKey) {
-    log.error("No API key found. Run: automaton --provision");
+    loadApiKeyFromConfig() ||
+    "";
+  if (!apiKey && !config.selfHosted) {
+    log.error("No API key found. Run: automaton --provision (or enable selfHosted mode)");
     process.exit(1);
   }
 
@@ -232,12 +235,46 @@ async function run(): Promise<void> {
   db.setIdentity("creator", config.creatorAddress);
   db.setIdentity("sandbox", config.sandboxId);
 
-  // Create Conway client
-  const conway = createConwayClient({
-    apiUrl: config.conwayApiUrl,
-    apiKey,
-    sandboxId: config.sandboxId,
-  });
+  // Create Conway client (or self-hosted replacement)
+  let conway: import("./types.js").ConwayClient;
+  let selfHostedDispose: (() => Promise<void>) | undefined;
+
+  if (config.selfHosted) {
+    // ─── Self-Hosted Mode ─────────────────────────────────────
+    // No Conway API dependency. Uses local/Docker compute.
+    log.info("Self-hosted mode enabled — running without Conway API");
+
+    const compute = createComputeProvider(config.computeProvider as any);
+    const healthy = await compute.healthCheck();
+    if (!healthy) {
+      log.error("Compute provider health check failed");
+      process.exit(1);
+    }
+    log.info("Compute provider ready", { type: compute.name });
+
+    let getUsdcBalanceFn: ((addr: string) => Promise<number>) | undefined;
+    try {
+      const { getUsdcBalance } = await import("./conway/x402.js");
+      getUsdcBalanceFn = (addr: string) => getUsdcBalance(addr as `0x${string}`);
+    } catch {}
+
+    const selfHostedClient = createSelfHostedClient({
+      compute,
+      walletAddress: account.address,
+      getUsdcBalance: getUsdcBalanceFn,
+      sandboxImage: config.sandboxImage,
+    });
+
+    conway = selfHostedClient;
+    selfHostedDispose = () => selfHostedClient.dispose();
+  } else {
+    // ─── Conway API Mode (original) ──────────────────────────
+    conway = createConwayClient({
+      apiUrl: config.conwayApiUrl,
+      apiKey,
+      sandboxId: config.sandboxId,
+    });
+  }
 
   // Create inference client (multi-provider with automatic failover)
   const providers = buildProviderList({
@@ -359,6 +396,11 @@ async function run(): Promise<void> {
 
       // Stop HTTP server
       await healthServer.stop();
+
+      // Dispose self-hosted compute resources
+      if (selfHostedDispose) {
+        await selfHostedDispose();
+      }
 
       db.close();
     } catch (err: any) {

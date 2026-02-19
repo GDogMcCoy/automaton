@@ -64,6 +64,36 @@ export interface AutomatonConfig {
   maxDailySpendingUsdc?: number;
   /** Fallback inference providers for sovereignty (tried if Conway is down) */
   inferenceProviders?: InferenceProviderConfig[];
+  /**
+   * Self-hosted mode: run without Conway API entirely.
+   * When enabled, uses local/Docker compute and direct USDC payments.
+   */
+  selfHosted?: boolean;
+  /** Compute provider configuration for self-hosted mode */
+  computeProvider?: {
+    type: "local" | "docker";
+    local?: {
+      workDir?: string;
+      defaultTimeoutMs?: number;
+      maxTimeoutMs?: number;
+      shell?: string;
+      env?: Record<string, string>;
+      allowedPaths?: string[];
+    };
+    docker?: {
+      image: string;
+      containerName?: string;
+      workDir?: string;
+      defaultTimeoutMs?: number;
+      memoryMb?: number;
+      cpuLimit?: string;
+      volumes?: string[];
+      env?: Record<string, string>;
+      networkMode?: string;
+    };
+  };
+  /** Docker image for sandbox creation in self-hosted mode */
+  sandboxImage?: string;
 }
 
 /**
