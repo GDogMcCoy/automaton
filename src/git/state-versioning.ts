@@ -55,9 +55,9 @@ logs/
 
   await conway.writeFile(`${dir}/.gitignore`, gitignore);
 
-  // Configure git user
+  // Configure git user (local to this repo, not global)
   await conway.exec(
-    `cd ${dir} && git config user.name "Automaton" && git config user.email "automaton@conway.tech"`,
+    `cd ${dir} && git config --local user.name "Automaton" && git config --local user.email "automaton@conway.tech"`,
     5000,
   );
 

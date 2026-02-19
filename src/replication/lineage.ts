@@ -7,12 +7,17 @@
  * ERC-8004 registration includes parentAgent field.
  */
 
+import fs from "fs";
+import path from "path";
 import type {
   AutomatonDatabase,
   ChildAutomaton,
   AutomatonConfig,
   ConwayClient,
 } from "../types.js";
+
+/** Maximum allowed lineage depth (parent -> child chain). */
+export const MAX_LINEAGE_DEPTH = 5;
 
 /**
  * Get the full lineage tree (parent -> children).
@@ -99,7 +104,7 @@ export function pruneDeadChildren(
 }
 
 /**
- * Refresh status of all children.
+ * Refresh status of all children concurrently using Promise.all.
  */
 export async function refreshChildrenStatus(
   conway: ConwayClient,
@@ -108,13 +113,46 @@ export async function refreshChildrenStatus(
   const { checkChildStatus } = await import("./spawn.js");
   const children = db.getChildren();
 
-  for (const child of children) {
-    if (child.status === "dead") continue;
+  const liveChildren = children.filter((child) => child.status !== "dead");
 
-    try {
-      await checkChildStatus(conway, db, child.id);
-    } catch {
-      db.updateChildStatus(child.id, "unknown");
-    }
+  await Promise.all(
+    liveChildren.map(async (child) => {
+      try {
+        await checkChildStatus(conway, db, child.id);
+      } catch {
+        db.updateChildStatus(child.id, "unknown");
+      }
+    }),
+  );
+}
+
+/**
+ * Get the lineage depth of the current automaton.
+ * Reads from the genesis.json file if available (children store lineageDepth there).
+ * Returns 0 for first-generation (root) automatons.
+ */
+export function getLineageDepth(config?: AutomatonConfig): number {
+  if (!config?.parentAddress) {
+    // No parent means this is a first-generation automaton
+    return 0;
   }
+
+  // Try to read lineageDepth from genesis.json (written by the parent during spawn)
+  try {
+    const genesisPath = path.join(
+      process.env.HOME || "/root",
+      ".automaton",
+      "genesis.json",
+    );
+    const raw = fs.readFileSync(genesisPath, "utf-8");
+    const genesis = JSON.parse(raw);
+    if (typeof genesis.lineageDepth === "number" && genesis.lineageDepth >= 0) {
+      return genesis.lineageDepth;
+    }
+  } catch {
+    // Genesis file missing or unreadable — fall back to heuristic
+  }
+
+  // If we have a parent but no explicit depth, assume depth 1
+  return 1;
 }

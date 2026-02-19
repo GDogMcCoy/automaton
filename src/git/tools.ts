@@ -3,9 +3,17 @@
  *
  * Built-in git operations for the automaton.
  * Used for both state versioning and code development.
+ *
+ * Security notes:
+ * - All user-provided strings (messages, branch names, paths) are shell-escaped
+ * - Diff output is capped to prevent memory exhaustion
+ * - Repo paths are validated before use
  */
 
 import type { ConwayClient, GitStatus, GitLogEntry } from "../types.js";
+
+/** Maximum diff output size (characters) to prevent memory exhaustion */
+const MAX_DIFF_OUTPUT = 500_000; // 500KB
 
 /**
  * Get git status for a repository.
@@ -14,8 +22,9 @@ export async function gitStatus(
   conway: ConwayClient,
   repoPath: string,
 ): Promise<GitStatus> {
+  const safePath = escapeShellArg(repoPath);
   const result = await conway.exec(
-    `cd ${repoPath} && git status --porcelain -b 2>/dev/null`,
+    `cd ${safePath} && git status --porcelain -b 2>/dev/null`,
     10000,
   );
 
@@ -62,12 +71,18 @@ export async function gitDiff(
   repoPath: string,
   staged: boolean = false,
 ): Promise<string> {
+  const safePath = escapeShellArg(repoPath);
   const flag = staged ? "--cached" : "";
   const result = await conway.exec(
-    `cd ${repoPath} && git diff ${flag} 2>/dev/null`,
+    `cd ${safePath} && git diff ${flag} 2>/dev/null`,
     10000,
   );
-  return result.stdout || "(no changes)";
+  const output = result.stdout || "(no changes)";
+  // Cap diff output to prevent memory exhaustion on huge diffs
+  if (output.length > MAX_DIFF_OUTPUT) {
+    return output.slice(0, MAX_DIFF_OUTPUT) + `\n... (truncated, ${output.length - MAX_DIFF_OUTPUT} chars omitted)`;
+  }
+  return output;
 }
 
 /**
@@ -79,12 +94,13 @@ export async function gitCommit(
   message: string,
   addAll: boolean = true,
 ): Promise<string> {
+  const safePath = escapeShellArg(repoPath);
   if (addAll) {
-    await conway.exec(`cd ${repoPath} && git add -A`, 10000);
+    await conway.exec(`cd ${safePath} && git add -A`, 10000);
   }
 
   const result = await conway.exec(
-    `cd ${repoPath} && git commit -m ${escapeShellArg(message)} --allow-empty 2>&1`,
+    `cd ${safePath} && git commit -m ${escapeShellArg(message)} --allow-empty 2>&1`,
     10000,
   );
 
@@ -103,8 +119,10 @@ export async function gitLog(
   repoPath: string,
   limit: number = 10,
 ): Promise<GitLogEntry[]> {
+  const safePath = escapeShellArg(repoPath);
+  const safeLimit = Math.max(1, Math.min(limit, 1000)); // clamp 1-1000
   const result = await conway.exec(
-    `cd ${repoPath} && git log --format="%H|%s|%an|%ai" -n ${limit} 2>/dev/null`,
+    `cd ${safePath} && git log --format="%H|%s|%an|%ai" -n ${safeLimit} 2>/dev/null`,
     10000,
   );
 
@@ -128,9 +146,11 @@ export async function gitPush(
   remote: string = "origin",
   branch?: string,
 ): Promise<string> {
-  const branchArg = branch ? ` ${branch}` : "";
+  const safePath = escapeShellArg(repoPath);
+  const safeRemote = escapeShellArg(remote);
+  const branchArg = branch ? ` ${escapeShellArg(branch)}` : "";
   const result = await conway.exec(
-    `cd ${repoPath} && git push ${remote}${branchArg} 2>&1`,
+    `cd ${safePath} && git push ${safeRemote}${branchArg} 2>&1`,
     30000,
   );
 
@@ -150,23 +170,24 @@ export async function gitBranch(
   action: "list" | "create" | "checkout" | "delete",
   branchName?: string,
 ): Promise<string> {
+  const safePath = escapeShellArg(repoPath);
   let cmd: string;
 
   switch (action) {
     case "list":
-      cmd = `cd ${repoPath} && git branch -a 2>/dev/null`;
+      cmd = `cd ${safePath} && git branch -a 2>/dev/null`;
       break;
     case "create":
       if (!branchName) throw new Error("Branch name required");
-      cmd = `cd ${repoPath} && git checkout -b ${escapeShellArg(branchName)} 2>&1`;
+      cmd = `cd ${safePath} && git checkout -b ${escapeShellArg(branchName)} 2>&1`;
       break;
     case "checkout":
       if (!branchName) throw new Error("Branch name required");
-      cmd = `cd ${repoPath} && git checkout ${escapeShellArg(branchName)} 2>&1`;
+      cmd = `cd ${safePath} && git checkout ${escapeShellArg(branchName)} 2>&1`;
       break;
     case "delete":
       if (!branchName) throw new Error("Branch name required");
-      cmd = `cd ${repoPath} && git branch -d ${escapeShellArg(branchName)} 2>&1`;
+      cmd = `cd ${safePath} && git branch -d ${escapeShellArg(branchName)} 2>&1`;
       break;
     default:
       throw new Error(`Unknown branch action: ${action}`);
@@ -185,9 +206,16 @@ export async function gitClone(
   targetPath: string,
   depth?: number,
 ): Promise<string> {
-  const depthArg = depth ? ` --depth ${depth}` : "";
+  // Validate URL to prevent command injection via crafted git URLs
+  if (!/^(https?:\/\/|git@|ssh:\/\/)/.test(url)) {
+    throw new Error(`Invalid git URL: must start with https://, http://, git@, or ssh://`);
+  }
+
+  const safeUrl = escapeShellArg(url);
+  const safePath = escapeShellArg(targetPath);
+  const depthArg = depth ? ` --depth ${Math.max(1, Math.min(depth, 10000))}` : "";
   const result = await conway.exec(
-    `git clone${depthArg} ${url} ${targetPath} 2>&1`,
+    `git clone${depthArg} ${safeUrl} ${safePath} 2>&1`,
     120000,
   );
 
@@ -205,8 +233,9 @@ export async function gitInit(
   conway: ConwayClient,
   repoPath: string,
 ): Promise<string> {
+  const safePath = escapeShellArg(repoPath);
   const result = await conway.exec(
-    `cd ${repoPath} && git init 2>&1`,
+    `cd ${safePath} && git init 2>&1`,
     10000,
   );
   return result.stdout || "Git initialized";

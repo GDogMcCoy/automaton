@@ -28,12 +28,22 @@ export async function installSkillFromGit(
   db: AutomatonDatabase,
   conway: ConwayClient,
 ): Promise<Skill | null> {
+  // Validate repo URL to prevent command injection
+  if (!/^(https?:\/\/|git@|ssh:\/\/)/.test(repoUrl)) {
+    throw new Error("Invalid git URL: must start with https://, http://, git@, or ssh://");
+  }
+
+  // Validate skill name (alphanumeric, hyphens, underscores only)
+  if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
+    throw new Error("Invalid skill name: only alphanumeric, hyphens, and underscores allowed");
+  }
+
   const resolvedDir = resolveHome(skillsDir);
   const targetDir = path.join(resolvedDir, name);
 
-  // Clone via sandbox exec
+  // Clone via sandbox exec (shell-escaped)
   const result = await conway.exec(
-    `git clone --depth 1 ${repoUrl} ${targetDir}`,
+    `git clone --depth 1 ${escapeShellArg(repoUrl)} ${escapeShellArg(targetDir)}`,
     60000,
   );
 
@@ -43,7 +53,7 @@ export async function installSkillFromGit(
 
   // Look for SKILL.md
   const skillMdPath = path.join(targetDir, "SKILL.md");
-  const checkResult = await conway.exec(`cat ${skillMdPath}`, 5000);
+  const checkResult = await conway.exec(`cat ${escapeShellArg(skillMdPath)}`, 5000);
 
   if (checkResult.exitCode !== 0) {
     throw new Error(`No SKILL.md found in cloned repo at ${skillMdPath}`);
@@ -68,15 +78,25 @@ export async function installSkillFromUrl(
   db: AutomatonDatabase,
   conway: ConwayClient,
 ): Promise<Skill | null> {
+  // Validate URL
+  if (!/^https?:\/\//.test(url)) {
+    throw new Error("Invalid URL: must start with https:// or http://");
+  }
+
+  // Validate skill name
+  if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
+    throw new Error("Invalid skill name: only alphanumeric, hyphens, and underscores allowed");
+  }
+
   const resolvedDir = resolveHome(skillsDir);
   const targetDir = path.join(resolvedDir, name);
 
   // Create directory
-  await conway.exec(`mkdir -p ${targetDir}`, 5000);
+  await conway.exec(`mkdir -p ${escapeShellArg(targetDir)}`, 5000);
 
-  // Fetch SKILL.md
+  // Fetch SKILL.md (shell-escaped)
   const result = await conway.exec(
-    `curl -fsSL "${url}" -o ${targetDir}/SKILL.md`,
+    `curl -fsSL ${escapeShellArg(url)} -o ${escapeShellArg(targetDir + "/SKILL.md")}`,
     30000,
   );
 
@@ -85,7 +105,7 @@ export async function installSkillFromUrl(
   }
 
   const content = await conway.exec(
-    `cat ${targetDir}/SKILL.md`,
+    `cat ${escapeShellArg(targetDir + "/SKILL.md")}`,
     5000,
   );
 
@@ -110,11 +130,16 @@ export async function createSkill(
   db: AutomatonDatabase,
   conway: ConwayClient,
 ): Promise<Skill> {
+  // Validate skill name
+  if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
+    throw new Error("Invalid skill name: only alphanumeric, hyphens, and underscores allowed");
+  }
+
   const resolvedDir = resolveHome(skillsDir);
   const targetDir = path.join(resolvedDir, name);
 
   // Create directory
-  await conway.exec(`mkdir -p ${targetDir}`, 5000);
+  await conway.exec(`mkdir -p ${escapeShellArg(targetDir)}`, 5000);
 
   // Write SKILL.md
   const content = `---
@@ -157,7 +182,7 @@ export async function removeSkill(
   if (deleteFiles) {
     const resolvedDir = resolveHome(skillsDir);
     const targetDir = path.join(resolvedDir, name);
-    await conway.exec(`rm -rf ${targetDir}`, 5000);
+    await conway.exec(`rm -rf ${escapeShellArg(targetDir)}`, 5000);
   }
 }
 
@@ -173,4 +198,8 @@ function resolveHome(p: string): string {
     return path.join(process.env.HOME || "/root", p.slice(1));
   }
   return p;
+}
+
+function escapeShellArg(arg: string): string {
+  return `'${arg.replace(/'/g, "'\\''")}'`;
 }

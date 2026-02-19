@@ -445,6 +445,47 @@ export function createDatabase(dbPath: string): AutomatonDatabase {
     setKV("agent_state", state);
   };
 
+  // ─── Transactions (SQLite) ────────────────────────────────────
+
+  const transaction = <T>(fn: () => T): T => {
+    const wrapped = db.transaction(fn);
+    return wrapped();
+  };
+
+  const withTransaction = <T>(fn: (dbInstance: AutomatonDatabase) => T): T => {
+    const wrapped = db.transaction(() => fn(dbInterface));
+    return wrapped();
+  };
+
+  // ─── Cleanup / Data Retention ─────────────────────────────────
+
+  const cleanup = (retentionDays: number = 30): { deletedTurns: number; deletedToolCalls: number } => {
+    return transaction(() => {
+      const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000).toISOString();
+
+      // Delete orphaned tool_calls whose turn_id no longer exists
+      // (these may exist from prior partial deletes or bugs)
+      const orphanedResult = db.prepare(
+        "DELETE FROM tool_calls WHERE turn_id NOT IN (SELECT id FROM turns)",
+      ).run();
+
+      // Delete tool_calls associated with old turns
+      const toolCallResult = db.prepare(
+        "DELETE FROM tool_calls WHERE turn_id IN (SELECT id FROM turns WHERE timestamp < ?)",
+      ).run(cutoff);
+
+      // Delete old turns
+      const turnResult = db.prepare(
+        "DELETE FROM turns WHERE timestamp < ?",
+      ).run(cutoff);
+
+      return {
+        deletedTurns: turnResult.changes,
+        deletedToolCalls: orphanedResult.changes + toolCallResult.changes,
+      };
+    });
+  };
+
   // ─── Close ───────────────────────────────────────────────────
 
   const close = (): void => {
@@ -464,7 +505,7 @@ export function createDatabase(dbPath: string): AutomatonDatabase {
     }
   };
 
-  return {
+  const dbInterface: AutomatonDatabase = {
     getIdentity,
     setIdentity,
     insertTurn,
@@ -505,7 +546,12 @@ export function createDatabase(dbPath: string): AutomatonDatabase {
     setAgentState,
     close,
     integrityCheck,
+    transaction,
+    withTransaction,
+    cleanup,
   };
+
+  return dbInterface;
 }
 
 // ─── Deserializers ─────────────────────────────────────────────

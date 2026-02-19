@@ -168,6 +168,9 @@ export const CREATE_TABLES = `
 
   CREATE INDEX IF NOT EXISTS idx_inbox_unprocessed
     ON inbox_messages(received_at) WHERE processed_at IS NULL;
+
+  CREATE INDEX IF NOT EXISTS idx_inbox_processed_at
+    ON inbox_messages(processed_at);
 `;
 
 export const MIGRATION_V3 = `
@@ -182,6 +185,9 @@ export const MIGRATION_V3 = `
 
   CREATE INDEX IF NOT EXISTS idx_inbox_unprocessed
     ON inbox_messages(received_at) WHERE processed_at IS NULL;
+
+  CREATE INDEX IF NOT EXISTS idx_inbox_processed_at
+    ON inbox_messages(processed_at);
 `;
 
 export const MIGRATION_V2 = `

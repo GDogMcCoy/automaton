@@ -511,6 +511,13 @@ export interface AutomatonDatabase {
 
   // Diagnostics
   integrityCheck(): { ok: boolean; error?: string };
+
+  // Transaction support
+  transaction<T>(fn: () => T): T;
+  withTransaction<T>(fn: (db: AutomatonDatabase) => T): T;
+
+  // Data retention / cleanup
+  cleanup(retentionDays?: number): { deletedTurns: number; deletedToolCalls: number };
 }
 
 export interface InstalledTool {

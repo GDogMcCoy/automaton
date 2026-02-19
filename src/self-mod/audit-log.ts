@@ -76,3 +76,34 @@ export function generateAuditReport(
   lines.push(`=================================`);
   return lines.join("\n");
 }
+
+/**
+ * Generate a machine-readable JSON audit report.
+ * Useful for external audit tools or API export.
+ */
+export function generateAuditReportJson(
+  db: AutomatonDatabase,
+  options?: {
+    limit?: number;
+    type?: ModificationType;
+    since?: string;
+  },
+): { total: number; modifications: ModificationEntry[] } {
+  let mods = db.getRecentModifications(options?.limit || 100);
+
+  // Filter by type if specified
+  if (options?.type) {
+    mods = mods.filter((m) => m.type === options.type);
+  }
+
+  // Filter by date if specified
+  if (options?.since) {
+    const sinceTime = new Date(options.since).getTime();
+    mods = mods.filter((m) => new Date(m.timestamp).getTime() >= sinceTime);
+  }
+
+  return {
+    total: mods.length,
+    modifications: mods,
+  };
+}

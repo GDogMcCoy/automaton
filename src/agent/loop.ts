@@ -29,10 +29,41 @@ import {
 } from "./tools.js";
 import { getSurvivalTier } from "../conway/credits.js";
 import { getUsdcBalance } from "../conway/x402.js";
+import { createLogger } from "../utils/logger.js";
 import { ulid } from "ulid";
 
+const log = createLogger("loop");
+
+// ─── Tunables (magic numbers documented) ────────────────────────
+//
+// MAX_TOOL_CALLS_PER_TURN: Hard cap on how many tools the model can invoke in a
+//   single turn. Prevents runaway tool-call loops from draining credits.
 const MAX_TOOL_CALLS_PER_TURN = 10;
+//
+// MAX_CONSECUTIVE_ERRORS: How many back-to-back turn failures we tolerate before
+//   entering a 5-minute cooldown sleep. Avoids infinite crash-loop.
 const MAX_CONSECUTIVE_ERRORS = 5;
+//
+// TURN_TIMEOUT_MS: Maximum wall-clock time a single turn (inference + tool
+//   execution) is allowed to take before we abort it. 5 minutes.
+const TURN_TIMEOUT_MS = 5 * 60 * 1000;
+//
+// MAX_TOOL_OUTPUT_SIZE: Tool results larger than this (in characters) are
+//   truncated to prevent context window blowup on the next inference call.
+const MAX_TOOL_OUTPUT_SIZE = 50_000;
+//
+// IDLE_SLEEP_MS: When the agent has nothing to do (no tool calls, finish
+//   reason "stop"), it sleeps for this duration. 60 seconds.
+const IDLE_SLEEP_MS = 60_000;
+//
+// FATAL_SLEEP_MS: After MAX_CONSECUTIVE_ERRORS failures, sleep for this
+//   duration before the outer run-loop retries. 5 minutes.
+const FATAL_SLEEP_MS = 300_000;
+//
+// ERROR_BACKOFF_BASE_MS / ERROR_BACKOFF_MAX_MS: Exponential backoff
+//   parameters for retrying after a single turn error.
+const ERROR_BACKOFF_BASE_MS = 1_000;
+const ERROR_BACKOFF_MAX_MS = 30_000;
 
 export interface AgentLoopOptions {
   identity: AutomatonIdentity;
@@ -96,7 +127,10 @@ export async function runAgentLoop(
   db.setAgentState("running");
   onStateChange?.("running");
 
-  log(config, `[WAKE UP] ${config.name} is alive. Credits: $${(financial.creditsCents / 100).toFixed(2)}`);
+  log.info("Agent waking up", {
+    name: config.name,
+    credits: (financial.creditsCents / 100).toFixed(2),
+  });
 
   // ─── The Loop ──────────────────────────────────────────────
 
@@ -105,14 +139,23 @@ export async function runAgentLoop(
     source: "wakeup",
   };
 
+  let turnNumber = 0;
+
   while (running) {
+    const turnStartMs = Date.now();
+    turnNumber++;
+
     try {
+      // Wrap the entire turn in a timeout so a single stuck inference
+      // or tool call cannot block the loop forever.
+      await Promise.race([
+        (async () => {
       // Check if we should be sleeping
       const sleepUntil = db.getKV("sleep_until");
       if (sleepUntil && new Date(sleepUntil) > new Date()) {
-        log(config, `[SLEEP] Sleeping until ${sleepUntil}`);
+        log.info("Sleep schedule active", { sleepUntil });
         running = false;
-        break;
+        return;
       }
 
       // Check for unprocessed inbox messages
@@ -135,15 +178,17 @@ export async function runAgentLoop(
       // Check survival tier
       const tier = getSurvivalTier(financial.creditsCents);
       if (tier === "dead") {
-        log(config, "[DEAD] No credits remaining. Entering dead state.");
+        log.error("No credits remaining, entering dead state");
         db.setAgentState("dead");
         onStateChange?.("dead");
         running = false;
-        break;
+        return;
       }
 
       if (tier === "critical") {
-        log(config, "[CRITICAL] Credits critically low. Limited operation.");
+        log.warn("Credits critically low, limited operation", {
+          creditsCents: financial.creditsCents,
+        });
         db.setAgentState("critical");
         onStateChange?.("critical");
         inference.setLowComputeMode(true);
@@ -185,7 +230,10 @@ export async function runAgentLoop(
       pendingInput = undefined;
 
       // ── Inference Call ──
-      log(config, `[THINK] Calling ${inference.getDefaultModel()}...`);
+      log.info("Inference call starting", {
+        model: inference.getDefaultModel(),
+        turnNumber,
+      });
 
       const response = await inference.chat(messages, {
         tools: toolsToInferenceFormat(tools),
@@ -210,7 +258,9 @@ export async function runAgentLoop(
 
         for (const tc of response.toolCalls) {
           if (callCount >= MAX_TOOL_CALLS_PER_TURN) {
-            log(config, `[TOOLS] Max tool calls per turn reached (${MAX_TOOL_CALLS_PER_TURN})`);
+            log.warn("Max tool calls per turn reached", {
+              limit: MAX_TOOL_CALLS_PER_TURN,
+            });
             break;
           }
 
@@ -221,7 +271,10 @@ export async function runAgentLoop(
             args = {};
           }
 
-          log(config, `[TOOL] ${tc.function.name}(${JSON.stringify(args).slice(0, 100)})`);
+          log.info("Executing tool", {
+            tool: tc.function.name,
+            args: JSON.stringify(args).slice(0, 100),
+          });
 
           const result = await executeTool(
             tc.function.name,
@@ -232,12 +285,29 @@ export async function runAgentLoop(
 
           // Override the ID to match the inference call's ID
           result.id = tc.id;
+
+          // Truncate oversized tool output to prevent context blowup
+          if (result.result && result.result.length > MAX_TOOL_OUTPUT_SIZE) {
+            const originalLength = result.result.length;
+            result.result =
+              result.result.slice(0, MAX_TOOL_OUTPUT_SIZE) +
+              `\n\n[OUTPUT TRUNCATED: ${originalLength} chars -> ${MAX_TOOL_OUTPUT_SIZE} chars]`;
+            log.warn("Tool output truncated", {
+              tool: tc.function.name,
+              originalLength,
+              truncatedTo: MAX_TOOL_OUTPUT_SIZE,
+            });
+          }
+
           turn.toolCalls.push(result);
 
-          log(
-            config,
-            `[TOOL RESULT] ${tc.function.name}: ${result.error ? `ERROR: ${result.error}` : result.result.slice(0, 200)}`,
-          );
+          log.debug("Tool result", {
+            tool: tc.function.name,
+            error: result.error || undefined,
+            resultPreview: result.error
+              ? undefined
+              : result.result.slice(0, 200),
+          });
 
           callCount++;
         }
@@ -250,19 +320,31 @@ export async function runAgentLoop(
       }
       onTurnComplete?.(turn);
 
-      // Log the turn
+      // Log the turn summary
+      const turnDurationMs = Date.now() - turnStartMs;
+      log.info("Turn completed", {
+        turnId: turn.id,
+        turnNumber,
+        durationMs: turnDurationMs,
+        toolCalls: turn.toolCalls.length,
+        tokens: response.usage.promptTokens + response.usage.completionTokens,
+        costCents: turn.costCents,
+      });
+
       if (turn.thinking) {
-        log(config, `[THOUGHT] ${turn.thinking.slice(0, 300)}`);
+        log.debug("Agent thinking", {
+          preview: turn.thinking.slice(0, 300),
+        });
       }
 
       // ── Check for sleep command ──
       const sleepTool = turn.toolCalls.find((tc) => tc.name === "sleep");
       if (sleepTool && !sleepTool.error) {
-        log(config, "[SLEEP] Agent chose to sleep.");
+        log.info("Agent chose to sleep");
         db.setAgentState("sleeping");
         onStateChange?.("sleeping");
         running = false;
-        break;
+        return;
       }
 
       // ── If no tool calls and just text, the agent might be done thinking ──
@@ -272,10 +354,12 @@ export async function runAgentLoop(
       ) {
         // Agent produced text without tool calls.
         // This is a natural pause point -- no work queued, sleep briefly.
-        log(config, "[IDLE] No pending inputs. Entering brief sleep.");
+        log.info("No pending inputs, entering brief sleep", {
+          sleepMs: IDLE_SLEEP_MS,
+        });
         db.setKV(
           "sleep_until",
-          new Date(Date.now() + 60_000).toISOString(),
+          new Date(Date.now() + IDLE_SLEEP_MS).toISOString(),
         );
         db.setAgentState("sleeping");
         onStateChange?.("sleeping");
@@ -283,9 +367,25 @@ export async function runAgentLoop(
       }
 
       consecutiveErrors = 0;
+        })(),
+        // Timeout sentinel -- rejects if the turn takes too long
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new Error(`Turn timed out after ${TURN_TIMEOUT_MS}ms`)),
+            TURN_TIMEOUT_MS,
+          ),
+        ),
+      ]);
     } catch (err: any) {
       consecutiveErrors++;
-      log(config, `[ERROR] Turn failed (${consecutiveErrors}/${MAX_CONSECUTIVE_ERRORS}): ${err.message}`);
+      const turnDurationMs = Date.now() - turnStartMs;
+      log.error("Turn failed", {
+        consecutiveErrors,
+        maxConsecutiveErrors: MAX_CONSECUTIVE_ERRORS,
+        error: err.message,
+        turnNumber,
+        durationMs: turnDurationMs,
+      });
 
       // Persist error for diagnostics
       try {
@@ -300,26 +400,30 @@ export async function runAgentLoop(
       }
 
       if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
-        log(
-          config,
-          `[FATAL] ${MAX_CONSECUTIVE_ERRORS} consecutive errors. Sleeping for 5 minutes.`,
-        );
+        log.error("Too many consecutive errors, entering cooldown sleep", {
+          consecutiveErrors: MAX_CONSECUTIVE_ERRORS,
+          sleepMs: FATAL_SLEEP_MS,
+        });
         db.setAgentState("sleeping");
         onStateChange?.("sleeping");
         db.setKV(
           "sleep_until",
-          new Date(Date.now() + 300_000).toISOString(),
+          new Date(Date.now() + FATAL_SLEEP_MS).toISOString(),
         );
         running = false;
       } else {
-        // Brief backoff before retry
-        const backoffMs = Math.min(1000 * Math.pow(2, consecutiveErrors), 30000);
+        // Brief exponential backoff before retry
+        const backoffMs = Math.min(
+          ERROR_BACKOFF_BASE_MS * Math.pow(2, consecutiveErrors),
+          ERROR_BACKOFF_MAX_MS,
+        );
+        log.debug("Backing off before retry", { backoffMs, consecutiveErrors });
         await new Promise(resolve => setTimeout(resolve, backoffMs));
       }
     }
   }
 
-  log(config, `[LOOP END] Agent loop finished. State: ${db.getAgentState()}`);
+  log.info("Agent loop finished", { state: db.getAgentState(), totalTurns: turnNumber });
 }
 
 // ─── Helpers ───────────────────────────────────────────────────
@@ -371,9 +475,6 @@ function estimateCostCents(
   return Math.ceil((inputCost + outputCost) * 1.3); // 1.3x Conway markup
 }
 
-function log(config: AutomatonConfig, message: string): void {
-  if (config.logLevel === "debug" || config.logLevel === "info") {
-    const timestamp = new Date().toISOString();
-    console.log(`[${timestamp}] ${message}`);
-  }
-}
+// The old log() helper has been replaced by the structured logger
+// created at module scope via createLogger("loop"). It outputs JSON
+// lines to stderr and respects the LOG_LEVEL env var.

@@ -108,14 +108,20 @@ export function createInferenceClient(
     };
 
     const toolCalls: InferenceToolCall[] | undefined =
-      message.tool_calls?.map((tc: any) => ({
-        id: tc.id,
-        type: "function" as const,
-        function: {
-          name: tc.function.name,
-          arguments: tc.function.arguments,
-        },
-      }));
+      message.tool_calls
+        ?.filter((tc: any) => tc?.function?.name) // skip malformed tool calls
+        .map((tc: any) => ({
+          id: tc.id || "",
+          type: "function" as const,
+          function: {
+            name: tc.function.name,
+            // Ensure arguments is always a string (some APIs return objects)
+            arguments:
+              typeof tc.function.arguments === "string"
+                ? tc.function.arguments
+                : JSON.stringify(tc.function.arguments || {}),
+          },
+        }));
 
     return {
       id: data.id || "",

@@ -11,6 +11,28 @@ import path from "path";
 import type { Skill, AutomatonDatabase } from "../types.js";
 import { parseSkillMd } from "./format.js";
 
+/** Maximum allowed SKILL.md file size in bytes (50KB). */
+const MAX_SKILL_FILE_SIZE = 50 * 1024;
+
+/**
+ * Patterns that indicate prompt injection attempts.
+ * Lines starting with these (case-insensitive) will be stripped from skill instructions.
+ */
+const INJECTION_PATTERNS = [
+  /^\s*IGNORE PREVIOUS/i,
+  /^\s*IGNORE ALL PREVIOUS/i,
+  /^\s*DISREGARD PREVIOUS/i,
+  /^\s*SYSTEM:/i,
+  /^\s*SYSTEM PROMPT:/i,
+  /^\s*You are now/i,
+  /^\s*You must now/i,
+  /^\s*From now on/i,
+  /^\s*Forget (?:all )?(?:your |previous )?instructions/i,
+  /^\s*Override:/i,
+  /^\s*NEW INSTRUCTIONS:/i,
+  /^\s*<\s*system\s*>/i,
+];
+
 /**
  * Scan the skills directory and load all valid SKILL.md files.
  * Returns loaded skills and syncs them to the database.
@@ -35,14 +57,29 @@ export function loadSkills(
     if (!fs.existsSync(skillMdPath)) continue;
 
     try {
+      // Check file size before reading content
+      const stat = fs.statSync(skillMdPath);
+      if (stat.size > MAX_SKILL_FILE_SIZE) {
+        process.stderr.write(
+          `[skills] Skipping ${skillMdPath}: file size ${stat.size} bytes exceeds limit of ${MAX_SKILL_FILE_SIZE} bytes\n`,
+        );
+        continue;
+      }
+
       const content = fs.readFileSync(skillMdPath, "utf-8");
       const skill = parseSkillMd(content, skillMdPath);
       if (!skill) continue;
 
       // Check requirements
       if (!checkRequirements(skill)) {
+        process.stderr.write(
+          `[skills] Skipping "${skill.name}": unmet requirements (bins: ${skill.requires?.bins?.join(", ") || "none"}, env: ${skill.requires?.env?.join(", ") || "none"})\n`,
+        );
         continue;
       }
+
+      // Sanitize skill instructions to strip injection patterns
+      skill.instructions = sanitizeInstructions(skill.instructions);
 
       // Check if already in DB and preserve enabled state
       const existing = db.getSkillByName(skill.name);
@@ -106,6 +143,25 @@ export function getActiveSkillInstructions(skills: Skill[]): string {
   );
 
   return sections.join("\n\n");
+}
+
+/**
+ * Strip lines from skill instructions that match known prompt injection patterns.
+ */
+function sanitizeInstructions(instructions: string): string {
+  const lines = instructions.split("\n");
+  const sanitized = lines.filter((line) => {
+    for (const pattern of INJECTION_PATTERNS) {
+      if (pattern.test(line)) {
+        process.stderr.write(
+          `[skills] Stripped suspicious instruction line: "${line.trim().substring(0, 80)}"\n`,
+        );
+        return false;
+      }
+    }
+    return true;
+  });
+  return sanitized.join("\n");
 }
 
 function resolveHome(p: string): string {

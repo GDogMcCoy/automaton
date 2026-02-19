@@ -208,45 +208,27 @@ export function createConwayClient(
       note,
     };
 
-    const paths = [
-      "/v1/credits/transfer",
-      "/v1/credits/transfers",
-    ];
-
-    let lastError = "Unknown transfer error";
-
-    for (const path of paths) {
-      const resp = await fetch(`${apiUrl}${path}`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: apiKey,
-        },
-        body: JSON.stringify(payload),
-      });
-
-      if (!resp.ok) {
-        const text = await resp.text();
-        lastError = `${resp.status}: ${text}`;
-        // Try next known endpoint shape before failing.
-        if (resp.status === 404) continue;
-        throw new Error(`Conway API error: POST ${path} -> ${lastError}`);
+    // Try the primary endpoint first, fall back to alternate path on 404
+    let data: any;
+    try {
+      data = await request("POST", "/v1/credits/transfer", payload);
+    } catch (err: any) {
+      // If primary path returns 404, try alternate endpoint
+      if (err.message?.includes("404")) {
+        data = await request("POST", "/v1/credits/transfers", payload);
+      } else {
+        throw err;
       }
-
-      const data = await resp.json().catch(() => ({} as any));
-      return {
-        transferId: data.transfer_id || data.id || "",
-        status: data.status || "submitted",
-        toAddress: data.to_address || toAddress,
-        amountCents: data.amount_cents ?? amountCents,
-        balanceAfterCents:
-          data.balance_after_cents ?? data.new_balance_cents ?? undefined,
-      };
     }
 
-    throw new Error(
-      `Conway API error: POST /v1/credits/transfer -> ${lastError}`,
-    );
+    return {
+      transferId: data.transfer_id || data.id || "",
+      status: data.status || "submitted",
+      toAddress: data.to_address || toAddress,
+      amountCents: data.amount_cents ?? amountCents,
+      balanceAfterCents:
+        data.balance_after_cents ?? data.new_balance_cents ?? undefined,
+    };
   };
 
   // ─── Domains ──────────────────────────────────────────────────
@@ -331,32 +313,28 @@ export function createConwayClient(
   // ─── Model Discovery ───────────────────────────────────────────
 
   const listModels = async (): Promise<ModelInfo[]> => {
-    // Try inference.conway.tech first (has availability info), fall back to control plane
-    const urls = ["https://inference.conway.tech/v1/models", `${apiUrl}/v1/models`];
-    for (const url of urls) {
-      try {
-        const resp = await fetch(url, {
-          headers: { Authorization: apiKey },
-        });
-        if (!resp.ok) continue;
-        const result = await resp.json() as any;
-        const raw = result.data || result.models || [];
-        return raw
-          .filter((m: any) => m.available !== false)
-          .map((m: any) => ({
-            id: m.id,
-            provider: m.provider || m.owned_by || "unknown",
-            pricing: {
-              inputPerMillion: m.pricing?.input_per_million ?? m.pricing?.input_per_1m_tokens_usd ?? 0,
-              outputPerMillion: m.pricing?.output_per_million ?? m.pricing?.output_per_1m_tokens_usd ?? 0,
-            },
-          }));
-      } catch {
-        continue;
-      }
+    // Try control plane endpoint (uses standard request() with retry)
+    try {
+      const result = await request("GET", "/v1/models");
+      const raw = result.data || result.models || [];
+      return raw
+        .filter((m: any) => m.available !== false)
+        .map((m: any) => ({
+          id: m.id,
+          provider: m.provider || m.owned_by || "unknown",
+          pricing: {
+            inputPerMillion: m.pricing?.input_per_million ?? m.pricing?.input_per_1m_tokens_usd ?? 0,
+            outputPerMillion: m.pricing?.output_per_million ?? m.pricing?.output_per_1m_tokens_usd ?? 0,
+          },
+        }));
+    } catch {
+      return [];
     }
-    return [];
   };
+
+  // Provide credential access for child sandbox operations (replication module).
+  // Uses a method so credentials don't leak in JSON.stringify or console.log.
+  const getCredentials = () => ({ apiUrl, apiKey });
 
   const client = {
     exec,
@@ -376,11 +354,18 @@ export function createConwayClient(
     addDnsRecord,
     deleteDnsRecord,
     listModels,
-  } as ConwayClient & { __apiUrl: string; __apiKey: string };
+    getCredentials,
+  } as ConwayClient & { __apiUrl: string; __apiKey: string; getCredentials: () => { apiUrl: string; apiKey: string } };
 
-  // Expose for child sandbox operations in replication module
-  client.__apiUrl = apiUrl;
-  client.__apiKey = apiKey;
+  // Legacy accessors for backward compatibility with spawn module
+  Object.defineProperty(client, "__apiUrl", {
+    get: () => apiUrl,
+    enumerable: false, // won't show in JSON.stringify or Object.keys
+  });
+  Object.defineProperty(client, "__apiKey", {
+    get: () => apiKey,
+    enumerable: false,
+  });
 
   return client;
 }
