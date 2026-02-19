@@ -197,4 +197,19 @@ export const BUILTIN_TASKS: Record<string, HeartbeatTaskFn> = {
     return { shouldWake: false };
   },
 
+  cleanup_old_data: async (ctx) => {
+    const cleaned = ctx.db.cleanup(30);
+
+    ctx.db.setKV("last_cleanup", JSON.stringify({
+      deletedTurns: cleaned.deletedTurns,
+      deletedToolCalls: cleaned.deletedToolCalls,
+      timestamp: new Date().toISOString(),
+    }));
+
+    return {
+      shouldWake: false,
+      message: `Cleanup complete: removed ${cleaned.deletedTurns} old turns, ${cleaned.deletedToolCalls} old tool calls`,
+    };
+  },
+
 };

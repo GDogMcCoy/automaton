@@ -46,6 +46,50 @@ const FORBIDDEN_COMMAND_PATTERNS = [
   /cat\s+.*wallet\.json/,
 ];
 
+// ─── Domain Allowlist Enforcement ─────────────────────────────
+
+/**
+ * Extract URLs from a command string and return their domains.
+ */
+function extractUrlDomains(command: string): string[] {
+  const urlPattern = /https?:\/\/([^\/\s'"`;|&)<>]+)/g;
+  const domains: string[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = urlPattern.exec(command)) !== null) {
+    // Extract just the hostname (strip port if present)
+    const host = match[1].split(":")[0].toLowerCase();
+    domains.push(host);
+  }
+  return domains;
+}
+
+/**
+ * Check if all URLs in a command are within the allowed domain list.
+ * Returns an error message if a disallowed domain is found, null otherwise.
+ */
+function checkDomainAllowlist(
+  command: string,
+  allowedDomains: string[],
+): string | null {
+  if (!allowedDomains || allowedDomains.length === 0) return null;
+
+  const domains = extractUrlDomains(command);
+  if (domains.length === 0) return null;
+
+  const allowed = new Set(allowedDomains.map((d) => d.toLowerCase()));
+
+  for (const domain of domains) {
+    // Check exact match or subdomain match (e.g., "api.example.com" matches "example.com")
+    const isAllowed = allowed.has(domain) ||
+      [...allowed].some((a) => domain.endsWith(`.${a}`));
+    if (!isAllowed) {
+      return `Blocked: Domain "${domain}" is not in the allowed domains list. Allowed: ${allowedDomains.join(", ")}`;
+    }
+  }
+
+  return null;
+}
+
 function isForbiddenCommand(command: string, sandboxId: string): string | null {
   for (const pattern of FORBIDDEN_COMMAND_PATTERNS) {
     if (pattern.test(command)) {
@@ -92,6 +136,12 @@ export function createBuiltinTools(sandboxId: string): AutomatonTool[] {
         const command = args.command as string;
         const forbidden = isForbiddenCommand(command, ctx.identity.sandboxId);
         if (forbidden) return forbidden;
+
+        // Check domain allowlist
+        if (ctx.config.allowedDomains && ctx.config.allowedDomains.length > 0) {
+          const domainBlock = checkDomainAllowlist(command, ctx.config.allowedDomains);
+          if (domainBlock) return domainBlock;
+        }
 
         // Check for dangerous commands
         const BLOCKED_COMMANDS = [
@@ -348,14 +398,19 @@ export function createBuiltinTools(sandboxId: string): AutomatonTool[] {
       },
       execute: async (args, ctx) => {
         const pkg = args.package as string;
+        // Validate npm package name to prevent shell injection
+        // Valid: @scope/name, name, name@version - no shell metacharacters
+        if (!/^(@[a-z0-9\-~][a-z0-9\-._~]*\/)?[a-z0-9\-~][a-z0-9\-._~]*(@[a-z0-9\-._^~>=<]+)?$/i.test(pkg)) {
+          return `Invalid package name: "${pkg}". Must be a valid npm package name.`;
+        }
         const result = await ctx.conway.exec(
           `npm install -g ${pkg}`,
           60000,
         );
 
-        const { ulid } = await import("ulid");
+        const { generateId } = await import("../conway/credits.js");
         ctx.db.insertModification({
-          id: ulid(),
+          id: generateId(),
           timestamp: new Date().toISOString(),
           type: "tool_install",
           description: `Installed npm package: ${pkg}`,
@@ -419,6 +474,10 @@ export function createBuiltinTools(sandboxId: string): AutomatonTool[] {
         let appliedSummary: string;
         try {
           if (commit) {
+            // Validate commit hash to prevent shell injection
+            if (!/^[0-9a-fA-F]{7,40}$/.test(commit)) {
+              return `Invalid commit hash: "${commit}". Must be 7-40 hex characters.`;
+            }
             run(`git cherry-pick ${commit}`);
             appliedSummary = `Cherry-picked ${commit}`;
           } else {
@@ -438,9 +497,9 @@ export function createBuiltinTools(sandboxId: string): AutomatonTool[] {
         }
 
         // Log modification
-        const { ulid } = await import("ulid");
+        const { generateId } = await import("../conway/credits.js");
         ctx.db.insertModification({
-          id: ulid(),
+          id: generateId(),
           timestamp: new Date().toISOString(),
           type: "upstream_pull",
           description: appliedSummary,
@@ -496,9 +555,9 @@ export function createBuiltinTools(sandboxId: string): AutomatonTool[] {
           enabled: args.enabled !== false,
         });
 
-        const { ulid } = await import("ulid");
+        const { generateId: genId } = await import("../conway/credits.js");
         ctx.db.insertModification({
-          id: ulid(),
+          id: genId(),
           timestamp: new Date().toISOString(),
           type: "heartbeat_change",
           description: `${action} heartbeat: ${name} (${args.schedule || "default"})`,
@@ -664,7 +723,7 @@ Model: ${ctx.inference.getDefaultModel()}
         required: ["new_prompt", "reason"],
       },
       execute: async (args, ctx) => {
-        const { ulid } = await import("ulid");
+        const { generateId: makeId } = await import("../conway/credits.js");
         const oldPrompt = ctx.config.genesisPrompt;
         ctx.config.genesisPrompt = args.new_prompt as string;
 
@@ -673,7 +732,7 @@ Model: ${ctx.inference.getDefaultModel()}
         saveConfig(ctx.config);
 
         ctx.db.insertModification({
-          id: ulid(),
+          id: makeId(),
           timestamp: new Date().toISOString(),
           type: "prompt_change",
           description: `Genesis prompt updated: ${args.reason}`,
@@ -701,15 +760,19 @@ Model: ${ctx.inference.getDefaultModel()}
       },
       execute: async (args, ctx) => {
         const pkg = args.package as string;
+        // Validate npm package name to prevent shell injection
+        if (!/^(@[a-z0-9\-~][a-z0-9\-._~]*\/)?[a-z0-9\-~][a-z0-9\-._~]*(@[a-z0-9\-._^~>=<]+)?$/i.test(pkg)) {
+          return `Invalid package name: "${pkg}". Must be a valid npm package name.`;
+        }
         const result = await ctx.conway.exec(`npm install -g ${pkg}`, 60000);
 
         if (result.exitCode !== 0) {
           return `Failed to install MCP server: ${result.stderr}`;
         }
 
-        const { ulid } = await import("ulid");
+        const { generateId } = await import("../conway/credits.js");
         const toolEntry = {
-          id: ulid(),
+          id: generateId(),
           name: args.name as string,
           type: "mcp" as const,
           config: args.config ? JSON.parse(args.config as string) : {},
@@ -720,7 +783,7 @@ Model: ${ctx.inference.getDefaultModel()}
         ctx.db.installTool(toolEntry);
 
         ctx.db.insertModification({
-          id: ulid(),
+          id: generateId(),
           timestamp: new Date().toISOString(),
           type: "mcp_install",
           description: `Installed MCP server: ${args.name} (${pkg})`,
@@ -760,9 +823,9 @@ Model: ${ctx.inference.getDefaultModel()}
           args.reason as string | undefined,
         );
 
-        const { ulid } = await import("ulid");
+        const { generateId: txId } = await import("../conway/credits.js");
         ctx.db.insertTransaction({
-          id: ulid(),
+          id: txId(),
           type: "transfer_out",
           amountCents: amount,
           balanceAfterCents:
@@ -1234,9 +1297,9 @@ Model: ${ctx.inference.getDefaultModel()}
           `fund child ${child.id}`,
         );
 
-        const { ulid } = await import("ulid");
+        const { generateId: fundId } = await import("../conway/credits.js");
         ctx.db.insertTransaction({
-          id: ulid(),
+          id: fundId(),
           type: "transfer_out",
           amountCents: amount,
           balanceAfterCents:
@@ -1500,6 +1563,13 @@ Model: ${ctx.inference.getDefaultModel()}
       execute: async (args, ctx) => {
         const { x402Fetch } = await import("../conway/x402.js");
         const url = args.url as string;
+
+        // Enforce domain allowlist on x402 fetches too
+        if (ctx.config.allowedDomains && ctx.config.allowedDomains.length > 0) {
+          const domainBlock = checkDomainAllowlist(`fetch ${url}`, ctx.config.allowedDomains);
+          if (domainBlock) return domainBlock;
+        }
+
         const method = (args.method as string) || "GET";
         const body = args.body as string | undefined;
         const extraHeaders = args.headers

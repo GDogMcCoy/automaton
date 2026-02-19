@@ -54,9 +54,8 @@ export function logCreditCheck(
   db: AutomatonDatabase,
   state: FinancialState,
 ): void {
-  const { ulid } = await_ulid();
   db.insertTransaction({
-    id: ulid(),
+    id: generateId(),
     type: "credit_check",
     amountCents: state.creditsCents,
     description: `Balance check: ${formatCredits(state.creditsCents)} credits, ${state.usdcBalance.toFixed(4)} USDC`,
@@ -64,17 +63,17 @@ export function logCreditCheck(
   });
 }
 
-// Lazy ulid import helper
-function await_ulid() {
-  // Dynamic import would be async; for synchronous usage in better-sqlite3
-  // we use a simple counter-based ID as fallback
-  let counter = 0;
-  return {
-    ulid: () => {
-      const timestamp = Date.now().toString(36);
-      const random = Math.random().toString(36).substring(2, 8);
-      counter++;
-      return `${timestamp}-${random}-${counter.toString(36)}`;
-    },
-  };
+/** Monotonic counter for ID uniqueness within a single process. */
+let idCounter = 0;
+
+/**
+ * Generate a time-sortable unique ID.
+ * Format: <ms-timestamp-base36>-<random-6chars>-<counter-base36>
+ * This is synchronous (no async import needed) and safe for SQLite.
+ */
+export function generateId(): string {
+  const timestamp = Date.now().toString(36);
+  const random = Math.random().toString(36).substring(2, 8);
+  idCounter++;
+  return `${timestamp}-${random}-${idCounter.toString(36)}`;
 }

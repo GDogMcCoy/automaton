@@ -142,3 +142,83 @@ export async function getStateHistory(
   const dir = resolveHome(AUTOMATON_DIR);
   return gitLog(conway, dir, limit);
 }
+
+// ─── Upstream Review Safety ──────────────────────────────────────
+
+/** Maximum number of upstream commits to review at once. */
+const MAX_UPSTREAM_COMMITS = 50;
+
+function escapeShellArg(arg: string): string {
+  return `'${arg.replace(/'/g, "'\\''")}'`;
+}
+
+/**
+ * Fetch origin and return the list of new upstream commits on origin/main
+ * that are not yet in HEAD. Returns at most MAX_UPSTREAM_COMMITS entries.
+ */
+export async function reviewUpstreamChanges(
+  conway: ConwayClient,
+  repoPath: string,
+): Promise<{ hash: string; message: string }[]> {
+  const safePath = escapeShellArg(repoPath);
+
+  // Fetch latest from origin
+  await conway.exec(`cd ${safePath} && git fetch origin 2>&1`, 30000);
+
+  // List commits that are on origin/main but not in HEAD
+  const result = await conway.exec(
+    `cd ${safePath} && git log HEAD..origin/main --oneline -n ${MAX_UPSTREAM_COMMITS} 2>/dev/null`,
+    10000,
+  );
+
+  if (!result.stdout.trim()) return [];
+
+  return result.stdout
+    .trim()
+    .split("\n")
+    .map((line) => {
+      const spaceIdx = line.indexOf(" ");
+      if (spaceIdx === -1) return { hash: line, message: "" };
+      return {
+        hash: line.slice(0, spaceIdx),
+        message: line.slice(spaceIdx + 1),
+      };
+    });
+}
+
+/**
+ * Cherry-pick a specific commit by hash.
+ * Validates the commit hash format before executing.
+ * Returns { success: true } or { success: false, error: string }.
+ */
+export async function cherryPickCommit(
+  conway: ConwayClient,
+  repoPath: string,
+  commitHash: string,
+): Promise<{ success: boolean; error?: string }> {
+  // Validate commit hash format: full 40 hex chars or abbreviated 7+ hex chars
+  const hashPattern = /^[0-9a-fA-F]{7,40}$/;
+  if (!hashPattern.test(commitHash)) {
+    return {
+      success: false,
+      error: `Invalid commit hash format: "${commitHash}". Must be 7-40 hex characters.`,
+    };
+  }
+
+  const safePath = escapeShellArg(repoPath);
+  const safeHash = escapeShellArg(commitHash);
+
+  const result = await conway.exec(
+    `cd ${safePath} && git cherry-pick ${safeHash} 2>&1`,
+    30000,
+  );
+
+  if (result.exitCode !== 0) {
+    return {
+      success: false,
+      error: result.stderr || result.stdout || "Cherry-pick failed",
+    };
+  }
+
+  return { success: true };
+}
