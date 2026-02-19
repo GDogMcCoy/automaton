@@ -75,37 +75,97 @@ export function resolvePath(p: string): string {
 export function validateConfig(config: AutomatonConfig): string[] {
   const issues: string[] = [];
 
+  // ─── Required fields ──────────────────────────────────────
   if (!config.name || config.name.trim().length === 0) {
     issues.push("name is required");
+  } else if (config.name.length > 128) {
+    issues.push("name must be at most 128 characters");
   }
 
   if (!config.conwayApiUrl || !config.conwayApiUrl.startsWith("http")) {
     issues.push("conwayApiUrl must be a valid HTTP(S) URL");
+  } else {
+    try {
+      const url = new URL(config.conwayApiUrl);
+      if (!["http:", "https:"].includes(url.protocol)) {
+        issues.push("conwayApiUrl must use http or https protocol");
+      }
+    } catch {
+      issues.push("conwayApiUrl is not a valid URL");
+    }
   }
 
   if (!config.conwayApiKey || config.conwayApiKey.trim().length === 0) {
     issues.push("conwayApiKey is required");
   }
 
+  // ─── Enum validations ─────────────────────────────────────
   const validSelfModModes: SelfModMode[] = ["disabled", "gated", "full"];
   if (!validSelfModModes.includes(config.selfModMode)) {
     issues.push(`selfModMode must be one of: ${validSelfModModes.join(", ")}`);
   }
 
-  if (config.maxTokensPerTurn < 256 || config.maxTokensPerTurn > 128000) {
+  const validLogLevels = ["debug", "info", "warn", "error"];
+  if (!validLogLevels.includes(config.logLevel)) {
+    issues.push(`logLevel must be one of: ${validLogLevels.join(", ")}`);
+  }
+
+  // ─── Numeric range validations ────────────────────────────
+  if (!Number.isFinite(config.maxTokensPerTurn) || config.maxTokensPerTurn < 256 || config.maxTokensPerTurn > 128000) {
     issues.push("maxTokensPerTurn must be between 256 and 128000");
   }
 
-  if (config.maxChildren < 0 || config.maxChildren > 20) {
-    issues.push("maxChildren must be between 0 and 20");
+  if (!Number.isInteger(config.maxChildren) || config.maxChildren < 0 || config.maxChildren > 20) {
+    issues.push("maxChildren must be an integer between 0 and 20");
   }
 
-  if (config.maxDailySpendingUsdc !== undefined && config.maxDailySpendingUsdc <= 0) {
-    issues.push("maxDailySpendingUsdc must be a positive number");
+  if (config.maxDailySpendingUsdc !== undefined) {
+    if (!Number.isFinite(config.maxDailySpendingUsdc) || config.maxDailySpendingUsdc <= 0) {
+      issues.push("maxDailySpendingUsdc must be a positive number");
+    }
+    if (config.maxDailySpendingUsdc > 10000) {
+      issues.push("maxDailySpendingUsdc exceeds safety limit of $10,000");
+    }
   }
 
-  if (config.allowedDomains && !Array.isArray(config.allowedDomains)) {
-    issues.push("allowedDomains must be an array of domain strings");
+  // ─── Array validations ────────────────────────────────────
+  if (config.allowedDomains !== undefined) {
+    if (!Array.isArray(config.allowedDomains)) {
+      issues.push("allowedDomains must be an array of domain strings");
+    } else {
+      for (const domain of config.allowedDomains) {
+        if (typeof domain !== "string" || domain.length === 0) {
+          issues.push("allowedDomains entries must be non-empty strings");
+          break;
+        }
+      }
+    }
+  }
+
+  // ─── Address format validation ────────────────────────────
+  const addressPattern = /^0x[a-fA-F0-9]{40}$/;
+  if (config.walletAddress && !addressPattern.test(config.walletAddress)) {
+    issues.push("walletAddress must be a valid Ethereum address (0x + 40 hex chars)");
+  }
+  if (config.creatorAddress && !addressPattern.test(config.creatorAddress)) {
+    issues.push("creatorAddress must be a valid Ethereum address");
+  }
+  if (config.parentAddress && !addressPattern.test(config.parentAddress)) {
+    issues.push("parentAddress must be a valid Ethereum address");
+  }
+
+  // ─── URL format validation ────────────────────────────────
+  if (config.socialRelayUrl) {
+    try {
+      new URL(config.socialRelayUrl);
+    } catch {
+      issues.push("socialRelayUrl is not a valid URL");
+    }
+  }
+
+  // ─── Replication safety check ─────────────────────────────
+  if (config.replicationEnabled && config.selfModMode === "full") {
+    issues.push("DANGER: replication + full self-mod mode is a risky combination");
   }
 
   return issues;

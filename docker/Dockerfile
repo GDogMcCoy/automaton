@@ -50,16 +50,18 @@ RUN mkdir -p /app/data && chown -R automaton:automaton /app
 # Switch to non-root user
 USER automaton
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-  CMD curl -f http://localhost:8080/health || exit 1
+# Health check — uses the built-in HTTP server on HEALTH_PORT
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+  CMD curl -sf http://localhost:8080/health || exit 1
 
-# Expose health check port
-EXPOSE 8080 9090
+# Expose health/metrics port
+EXPOSE 8080
 
 # Set environment
 ENV NODE_ENV=production
 ENV AUTOMATON_DATA_DIR=/app/data
+ENV HEALTH_PORT=8080
+ENV LOG_LEVEL=info
 
 ENTRYPOINT ["node", "dist/index.js"]
 CMD ["--run"]

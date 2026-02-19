@@ -13,11 +13,18 @@ ExecStart=/usr/bin/node dist/index.js --run
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=always
 RestartSec=10
-StartLimitInterval=60
-StartLimitBurst=3
+StartLimitInterval=300
+StartLimitBurst=5
+
+# Graceful shutdown: give 30s for drain + cleanup
+TimeoutStopSec=30
+KillMode=mixed
+KillSignal=SIGTERM
 
 # Environment
 Environment=NODE_ENV=production
+Environment=HEALTH_PORT=8080
+Environment=LOG_LEVEL=info
 EnvironmentFile=-/etc/automaton/env
 
 # Security hardening

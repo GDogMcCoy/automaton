@@ -47,3 +47,21 @@ export {
   type MetricsSnapshot,
   type HistogramStats,
 } from "./metrics.js";
+
+export {
+  loadSecret,
+  loadSecrets,
+  validateRequiredSecrets,
+  maskSecret,
+  type SecretsConfig,
+} from "./secrets.js";
+
+export {
+  withTrace,
+  getTraceId,
+  getTraceContext,
+  generateTraceId,
+  createSpan,
+  getTraceMetadata,
+  type TraceContext,
+} from "./tracing.js";

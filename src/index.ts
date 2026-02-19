@@ -18,13 +18,24 @@ import {
   loadHeartbeatConfig,
   syncHeartbeatToDb,
 } from "./heartbeat/config.js";
-import { runAgentLoop } from "./agent/loop.js";
+import { runAgentLoop, getLoopMetrics } from "./agent/loop.js";
 import { loadSkills } from "./skills/loader.js";
 import { initStateRepo } from "./git/state-versioning.js";
 import { createSocialClient } from "./social/client.js";
+import { createHealthServer } from "./http/server.js";
+import { createLogger } from "./utils/logger.js";
+import { loadSecret } from "./utils/secrets.js";
 import type { AutomatonIdentity, AgentState, Skill, SocialClientInterface } from "./types.js";
 
 const VERSION = "0.1.0";
+const log = createLogger("main");
+
+// ─── Run-loop circuit breaker ──────────────────────────────────
+// After MAX_CONSECUTIVE_RUN_ERRORS errors with no successful agent
+// loop completion in between, enter an extended cooldown to avoid
+// burning resources on a persistent failure (corrupt DB, bad config, etc).
+const MAX_CONSECUTIVE_RUN_ERRORS = 10;
+const RUN_ERROR_COOLDOWN_MS = 10 * 60 * 1000; // 10 minutes
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
@@ -53,6 +64,8 @@ Usage:
 Environment:
   CONWAY_API_URL           Conway API URL (default: https://api.conway.tech)
   CONWAY_API_KEY           Conway API key (overrides config)
+  HEALTH_PORT              HTTP health/metrics port (default: 8080)
+  LOG_LEVEL                Logging level: debug, info, warn, error
 `);
     process.exit(0);
   }
@@ -147,7 +160,8 @@ Version:    ${config.version}
 // ─── Main Run ──────────────────────────────────────────────────
 
 async function run(): Promise<void> {
-  console.log(`[${new Date().toISOString()}] Conway Automaton v${VERSION} starting...`);
+  const startTime = Date.now();
+  log.info("Conway Automaton starting", { version: VERSION });
 
   // Load config — first run triggers interactive setup wizard
   let config = loadConfig();
@@ -159,26 +173,24 @@ async function run(): Promise<void> {
   // Validate config
   const configIssues = validateConfig(config);
   if (configIssues.length > 0) {
-    console.warn(`[${new Date().toISOString()}] Config warnings:`);
-    for (const issue of configIssues) {
-      console.warn(`  - ${issue}`);
-    }
+    log.warn("Config validation warnings", { issues: configIssues });
   }
 
   // Configure spending limits from config
   if (config.maxDailySpendingUsdc) {
     const { configureSpendingLimits } = await import("./conway/x402.js");
     configureSpendingLimits({ maxDailySpendingUsdc: config.maxDailySpendingUsdc });
-    console.log(`[${new Date().toISOString()}] Daily USDC spending limit: $${config.maxDailySpendingUsdc}`);
+    log.info("Daily spending limit configured", { limitUsdc: config.maxDailySpendingUsdc });
   }
 
-  // Load wallet
+  // Load wallet — prefer secrets manager, then config
   const { account } = await getWallet();
-  const apiKey = config.conwayApiKey || loadApiKeyFromConfig();
+  const apiKey =
+    loadSecret("CONWAY_API_KEY") ||
+    config.conwayApiKey ||
+    loadApiKeyFromConfig();
   if (!apiKey) {
-    console.error(
-      "No API key found. Run: automaton --provision",
-    );
+    log.error("No API key found. Run: automaton --provision");
     process.exit(1);
   }
 
@@ -200,17 +212,17 @@ async function run(): Promise<void> {
   // Run database integrity check
   const dbCheck = db.integrityCheck();
   if (!dbCheck.ok) {
-    console.error(`[${new Date().toISOString()}] DATABASE INTEGRITY ISSUE: ${dbCheck.error}`);
+    log.error("Database integrity issue", { error: dbCheck.error });
   }
 
   // Run data cleanup (retain 30 days of history)
   try {
     const cleaned = db.cleanup(30);
     if (cleaned.deletedTurns > 0 || cleaned.deletedToolCalls > 0) {
-      console.log(`[${new Date().toISOString()}] Cleanup: removed ${cleaned.deletedTurns} old turns, ${cleaned.deletedToolCalls} tool calls`);
+      log.info("Data cleanup complete", cleaned);
     }
   } catch (err: any) {
-    console.warn(`[${new Date().toISOString()}] Cleanup failed: ${err.message}`);
+    log.warn("Cleanup failed", { error: err.message });
   }
 
   // Store identity in DB
@@ -238,7 +250,25 @@ async function run(): Promise<void> {
   let social: SocialClientInterface | undefined;
   if (config.socialRelayUrl) {
     social = createSocialClient(config.socialRelayUrl, account);
-    console.log(`[${new Date().toISOString()}] Social relay: ${config.socialRelayUrl}`);
+    log.info("Social relay connected", { url: config.socialRelayUrl });
+  }
+
+  // ─── Start HTTP Health/Metrics Server ────────────────────────
+  const healthPort = parseInt(process.env.HEALTH_PORT || "8080", 10);
+  const metrics = getLoopMetrics();
+  const healthServer = createHealthServer({
+    port: healthPort,
+    db,
+    metrics,
+    version: VERSION,
+    startTime,
+  });
+
+  try {
+    await healthServer.start();
+    log.info("Health server started", { port: healthPort });
+  } catch (err: any) {
+    log.warn("Health server failed to start (non-fatal)", { error: err.message });
   }
 
   // Load and sync heartbeat config
@@ -251,17 +281,17 @@ async function run(): Promise<void> {
   let skills: Skill[] = [];
   try {
     skills = loadSkills(skillsDir, db);
-    console.log(`[${new Date().toISOString()}] Loaded ${skills.length} skills.`);
+    log.info("Skills loaded", { count: skills.length });
   } catch (err: any) {
-    console.warn(`[${new Date().toISOString()}] Skills loading failed: ${err.message}`);
+    log.warn("Skills loading failed", { error: err.message });
   }
 
   // Initialize state repo (git)
   try {
     await initStateRepo(conway);
-    console.log(`[${new Date().toISOString()}] State repo initialized.`);
+    log.info("State repo initialized");
   } catch (err: any) {
-    console.warn(`[${new Date().toISOString()}] State repo init failed: ${err.message}`);
+    log.warn("State repo init failed", { error: err.message });
   }
 
   // Start heartbeat daemon
@@ -272,41 +302,71 @@ async function run(): Promise<void> {
     conway,
     social,
     onWakeRequest: (reason) => {
-      console.log(`[HEARTBEAT] Wake request: ${reason}`);
-      // The heartbeat can trigger the agent loop
-      // In the main run loop, we check for wake requests
+      log.info("Wake request from heartbeat", { reason });
       db.setKV("wake_request", reason);
     },
   });
 
   heartbeat.start();
-  console.log(`[${new Date().toISOString()}] Heartbeat daemon started.`);
+  log.info("Heartbeat daemon started");
 
-  // Handle graceful shutdown
+  // Mark as ready for readiness probes
+  healthServer.setReady(true);
+
+  // ─── Graceful Shutdown ─────────────────────────────────────
   let isShuttingDown = false;
-  const shutdown = (signal: string) => {
-    if (isShuttingDown) return; // Prevent double-shutdown
+  const shutdown = async (signal: string) => {
+    if (isShuttingDown) return;
     isShuttingDown = true;
-    console.log(`[${new Date().toISOString()}] Received ${signal}. Shutting down gracefully...`);
+    log.info("Graceful shutdown initiated", { signal });
+
+    // Drain phase: stop accepting new work
+    healthServer.setReady(false);
+
     try {
       heartbeat.stop();
+
+      // Record shutdown metadata
       db.setAgentState("sleeping");
       db.setKV("last_shutdown", JSON.stringify({
         signal,
         timestamp: new Date().toISOString(),
         reason: "graceful",
+        uptimeSeconds: Math.floor((Date.now() - startTime) / 1000),
       }));
+
+      // Stop HTTP server
+      await healthServer.stop();
+
       db.close();
     } catch (err: any) {
-      console.error(`[${new Date().toISOString()}] Error during shutdown: ${err.message}`);
+      log.error("Error during shutdown", { error: err.message });
     }
+
+    log.info("Shutdown complete", {
+      signal,
+      uptimeSeconds: Math.floor((Date.now() - startTime) / 1000),
+    });
     process.exit(0);
   };
 
   process.on("SIGTERM", () => shutdown("SIGTERM"));
   process.on("SIGINT", () => shutdown("SIGINT"));
+  process.on("SIGHUP", () => {
+    // SIGHUP: reload config without full restart
+    log.info("Received SIGHUP, reloading config");
+    try {
+      const newConfig = loadConfig();
+      if (newConfig) {
+        Object.assign(config, newConfig);
+        log.info("Config reloaded");
+      }
+    } catch (err: any) {
+      log.error("Config reload failed", { error: err.message });
+    }
+  });
   process.on("uncaughtException", (err) => {
-    console.error(`[${new Date().toISOString()}] Uncaught exception: ${err.message}`);
+    log.error("Uncaught exception", { error: err.message, stack: err.stack?.slice(0, 1000) });
     try {
       db.setKV("last_fatal_error", JSON.stringify({
         message: err.message,
@@ -317,16 +377,24 @@ async function run(): Promise<void> {
     shutdown("uncaughtException");
   });
 
-  // ─── Main Run Loop ──────────────────────────────────────────
+  // ─── Main Run Loop with Circuit Breaker ────────────────────
   // The automaton alternates between running and sleeping.
   // The heartbeat can wake it up.
+  // Circuit breaker: after MAX_CONSECUTIVE_RUN_ERRORS failures
+  // in a row, enter extended cooldown.
+
+  let consecutiveRunErrors = 0;
 
   while (true) {
+    if (isShuttingDown) break;
+
     try {
       // Reload skills (may have changed since last loop)
       try {
         skills = loadSkills(skillsDir, db);
       } catch {}
+
+      metrics.counter("run_loop.iterations");
 
       // Run the agent loop
       await runAgentLoop({
@@ -338,23 +406,28 @@ async function run(): Promise<void> {
         social,
         skills,
         onStateChange: (state: AgentState) => {
-          console.log(`[${new Date().toISOString()}] State: ${state}`);
+          log.info("Agent state changed", { state });
+          metrics.gauge("agent.state_ordinal", stateToOrdinal(state));
         },
         onTurnComplete: (turn) => {
-          console.log(
-            `[${new Date().toISOString()}] Turn ${turn.id}: ${turn.toolCalls.length} tools, ${turn.tokenUsage.totalTokens} tokens`,
-          );
+          log.info("Turn complete", {
+            turnId: turn.id,
+            tools: turn.toolCalls.length,
+            tokens: turn.tokenUsage.totalTokens,
+          });
         },
       });
+
+      // Success — reset circuit breaker
+      consecutiveRunErrors = 0;
 
       // Agent loop exited (sleeping or dead)
       const state = db.getAgentState();
 
       if (state === "dead") {
-        console.log(`[${new Date().toISOString()}] Automaton is dead. Heartbeat will continue.`);
-        // In dead state, we just wait for funding
-        // The heartbeat will keep checking and broadcasting distress
-        await sleep(300_000); // Check every 5 minutes
+        log.warn("Automaton is dead, heartbeat will continue");
+        metrics.gauge("agent.state_ordinal", stateToOrdinal("dead"));
+        await sleep(300_000);
         continue;
       }
 
@@ -364,23 +437,19 @@ async function run(): Promise<void> {
           ? new Date(sleepUntilStr).getTime()
           : Date.now() + 60_000;
         const sleepMs = Math.max(sleepUntil - Date.now(), 10_000);
-        console.log(
-          `[${new Date().toISOString()}] Sleeping for ${Math.round(sleepMs / 1000)}s`,
-        );
+        log.info("Sleeping", { sleepSeconds: Math.round(sleepMs / 1000) });
 
         // Sleep, but check for wake requests periodically
         const checkInterval = Math.min(sleepMs, 30_000);
         let slept = 0;
-        while (slept < sleepMs) {
+        while (slept < sleepMs && !isShuttingDown) {
           await sleep(checkInterval);
           slept += checkInterval;
 
           // Check for wake request from heartbeat
           const wakeRequest = db.getKV("wake_request");
           if (wakeRequest) {
-            console.log(
-              `[${new Date().toISOString()}] Woken by heartbeat: ${wakeRequest}`,
-            );
+            log.info("Woken by heartbeat", { reason: wakeRequest });
             db.deleteKV("wake_request");
             db.deleteKV("sleep_until");
             break;
@@ -392,17 +461,53 @@ async function run(): Promise<void> {
         continue;
       }
     } catch (err: any) {
-      console.error(
-        `[${new Date().toISOString()}] Fatal error in run loop: ${err.message}`,
-      );
-      // Wait before retrying
-      await sleep(30_000);
+      consecutiveRunErrors++;
+      metrics.counter("run_loop.errors");
+
+      log.error("Fatal error in run loop", {
+        error: err.message,
+        consecutiveErrors: consecutiveRunErrors,
+        maxErrors: MAX_CONSECUTIVE_RUN_ERRORS,
+      });
+
+      if (consecutiveRunErrors >= MAX_CONSECUTIVE_RUN_ERRORS) {
+        // Circuit breaker tripped
+        log.error("Run loop circuit breaker tripped, entering extended cooldown", {
+          cooldownMs: RUN_ERROR_COOLDOWN_MS,
+          consecutiveErrors: consecutiveRunErrors,
+        });
+        metrics.counter("run_loop.circuit_breaker_trips");
+        await sleep(RUN_ERROR_COOLDOWN_MS);
+        consecutiveRunErrors = 0; // Reset after cooldown
+      } else {
+        // Exponential backoff: 30s, 60s, 120s, ...
+        const backoffMs = Math.min(
+          30_000 * Math.pow(2, consecutiveRunErrors - 1),
+          RUN_ERROR_COOLDOWN_MS,
+        );
+        log.info("Backing off before retry", { backoffMs, consecutiveErrors: consecutiveRunErrors });
+        await sleep(backoffMs);
+      }
     }
   }
 }
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Map agent states to numeric ordinals for gauge metrics. */
+function stateToOrdinal(state: AgentState): number {
+  const ordinals: Record<AgentState, number> = {
+    setup: 0,
+    waking: 1,
+    running: 2,
+    sleeping: 3,
+    low_compute: 4,
+    critical: 5,
+    dead: 6,
+  };
+  return ordinals[state] ?? -1;
 }
 
 // ─── Entry Point ───────────────────────────────────────────────
