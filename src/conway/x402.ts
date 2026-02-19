@@ -26,9 +26,28 @@ const CHAINS: Record<string, any> = {
 };
 type NetworkId = keyof typeof USDC_ADDRESSES;
 
-// Spending limits to prevent drain attacks
-const MAX_SINGLE_PAYMENT_USDC = 10; // Max $10 USDC per transaction
-const MAX_DAILY_SPENDING_USDC = 100; // Max $100 USDC per day
+// Spending limits to prevent drain attacks (defaults, overridable via config)
+const DEFAULT_MAX_SINGLE_PAYMENT_USDC = 10;
+const DEFAULT_MAX_DAILY_SPENDING_USDC = 100;
+
+let maxSinglePaymentUsdc = DEFAULT_MAX_SINGLE_PAYMENT_USDC;
+let maxDailySpendingUsdc = DEFAULT_MAX_DAILY_SPENDING_USDC;
+
+/**
+ * Configure spending limits from operator config.
+ * Call at startup after loading config.
+ */
+export function configureSpendingLimits(limits: {
+  maxSinglePaymentUsdc?: number;
+  maxDailySpendingUsdc?: number;
+}): void {
+  if (limits.maxSinglePaymentUsdc !== undefined && limits.maxSinglePaymentUsdc > 0) {
+    maxSinglePaymentUsdc = limits.maxSinglePaymentUsdc;
+  }
+  if (limits.maxDailySpendingUsdc !== undefined && limits.maxDailySpendingUsdc > 0) {
+    maxDailySpendingUsdc = limits.maxDailySpendingUsdc;
+  }
+}
 
 // Track daily spending (resets when day changes)
 let dailySpendingTracker = { date: "", totalUsdc: 0 };
@@ -301,10 +320,10 @@ export async function x402Fetch(
 
     // Check spending limits
     const amountUsdc = Number(parseMaxAmountRequired(parsed.requirement.maxAmountRequired, parsed.x402Version)) / 1_000_000;
-    if (amountUsdc > MAX_SINGLE_PAYMENT_USDC) {
+    if (amountUsdc > maxSinglePaymentUsdc) {
       return {
         success: false,
-        error: `Payment of ${amountUsdc} USDC exceeds single transaction limit of ${MAX_SINGLE_PAYMENT_USDC} USDC`,
+        error: `Payment of ${amountUsdc} USDC exceeds single transaction limit of ${maxSinglePaymentUsdc} USDC`,
         status: 402,
       };
     }
@@ -314,10 +333,10 @@ export async function x402Fetch(
     if (dailySpendingTracker.date !== today) {
       dailySpendingTracker = { date: today, totalUsdc: 0 };
     }
-    if (dailySpendingTracker.totalUsdc + amountUsdc > MAX_DAILY_SPENDING_USDC) {
+    if (dailySpendingTracker.totalUsdc + amountUsdc > maxDailySpendingUsdc) {
       return {
         success: false,
-        error: `Daily spending limit of ${MAX_DAILY_SPENDING_USDC} USDC would be exceeded (spent today: ${dailySpendingTracker.totalUsdc.toFixed(2)} USDC)`,
+        error: `Daily spending limit of ${maxDailySpendingUsdc} USDC would be exceeded (spent today: ${dailySpendingTracker.totalUsdc.toFixed(2)} USDC)`,
         status: 402,
       };
     }

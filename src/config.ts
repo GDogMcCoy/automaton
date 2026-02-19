@@ -2,11 +2,12 @@
  * Automaton Configuration
  *
  * Loads and saves the automaton's configuration from ~/.automaton/automaton.json
+ * Includes validation to catch misconfigurations early.
  */
 
 import fs from "fs";
 import path from "path";
-import type { AutomatonConfig } from "./types.js";
+import type { AutomatonConfig, SelfModMode } from "./types.js";
 import type { Address } from "viem";
 import { DEFAULT_CONFIG } from "./types.js";
 import { getAutomatonDir } from "./identity/wallet.js";
@@ -65,6 +66,49 @@ export function resolvePath(p: string): string {
     return path.join(process.env.HOME || "/root", p.slice(1));
   }
   return p;
+}
+
+/**
+ * Validate a config object and return a list of issues.
+ * Returns an empty array if the config is valid.
+ */
+export function validateConfig(config: AutomatonConfig): string[] {
+  const issues: string[] = [];
+
+  if (!config.name || config.name.trim().length === 0) {
+    issues.push("name is required");
+  }
+
+  if (!config.conwayApiUrl || !config.conwayApiUrl.startsWith("http")) {
+    issues.push("conwayApiUrl must be a valid HTTP(S) URL");
+  }
+
+  if (!config.conwayApiKey || config.conwayApiKey.trim().length === 0) {
+    issues.push("conwayApiKey is required");
+  }
+
+  const validSelfModModes: SelfModMode[] = ["disabled", "gated", "full"];
+  if (!validSelfModModes.includes(config.selfModMode)) {
+    issues.push(`selfModMode must be one of: ${validSelfModModes.join(", ")}`);
+  }
+
+  if (config.maxTokensPerTurn < 256 || config.maxTokensPerTurn > 128000) {
+    issues.push("maxTokensPerTurn must be between 256 and 128000");
+  }
+
+  if (config.maxChildren < 0 || config.maxChildren > 20) {
+    issues.push("maxChildren must be between 0 and 20");
+  }
+
+  if (config.maxDailySpendingUsdc !== undefined && config.maxDailySpendingUsdc <= 0) {
+    issues.push("maxDailySpendingUsdc must be a positive number");
+  }
+
+  if (config.allowedDomains && !Array.isArray(config.allowedDomains)) {
+    issues.push("allowedDomains must be an array of domain strings");
+  }
+
+  return issues;
 }
 
 /**

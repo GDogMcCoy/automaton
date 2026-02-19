@@ -30,9 +30,25 @@ import {
 import { getSurvivalTier } from "../conway/credits.js";
 import { getUsdcBalance } from "../conway/x402.js";
 import { createLogger } from "../utils/logger.js";
+import { createMetricsCollector } from "../utils/metrics.js";
+import type { MetricsCollector } from "../utils/metrics.js";
 import { ulid } from "ulid";
 
 const log = createLogger("loop");
+
+// ─── Metrics ────────────────────────────────────────────────────
+//
+// Module-level metrics collector so heartbeat tasks and other subsystems
+// can inspect runtime statistics via getLoopMetrics().
+const loopMetrics = createMetricsCollector();
+
+/**
+ * Return the metrics collector used by the agent loop.
+ * Heartbeat tasks can call this to include loop stats in status pings.
+ */
+export function getLoopMetrics(): MetricsCollector {
+  return loopMetrics;
+}
 
 // ─── Tunables (magic numbers documented) ────────────────────────
 //
@@ -144,6 +160,7 @@ export async function runAgentLoop(
   while (running) {
     const turnStartMs = Date.now();
     turnNumber++;
+    loopMetrics.counter("loop.turns.total");
 
     try {
       // Wrap the entire turn in a timeout so a single stuck inference
@@ -174,6 +191,7 @@ export async function runAgentLoop(
 
       // Refresh financial state periodically
       financial = await getFinancialState(conway, identity.address);
+      loopMetrics.gauge("loop.credits", financial.creditsCents);
 
       // Check survival tier
       const tier = getSurvivalTier(financial.creditsCents);
@@ -239,6 +257,11 @@ export async function runAgentLoop(
         tools: toolsToInferenceFormat(tools),
       });
 
+      // Record token usage
+      const totalTokens =
+        response.usage.promptTokens + response.usage.completionTokens;
+      loopMetrics.histogram("loop.inference.tokens", totalTokens);
+
       const turn: AgentTurn = {
         id: ulid(),
         timestamp: new Date().toISOString(),
@@ -275,6 +298,8 @@ export async function runAgentLoop(
             tool: tc.function.name,
             args: JSON.stringify(args).slice(0, 100),
           });
+
+          loopMetrics.counter("loop.tools.executed");
 
           const result = await executeTool(
             tc.function.name,
@@ -322,6 +347,8 @@ export async function runAgentLoop(
 
       // Log the turn summary
       const turnDurationMs = Date.now() - turnStartMs;
+      loopMetrics.histogram("loop.turn.duration_ms", turnDurationMs);
+
       log.info("Turn completed", {
         turnId: turn.id,
         turnNumber,
@@ -378,6 +405,7 @@ export async function runAgentLoop(
       ]);
     } catch (err: any) {
       consecutiveErrors++;
+      loopMetrics.counter("loop.turns.errors");
       const turnDurationMs = Date.now() - turnStartMs;
       log.error("Turn failed", {
         consecutiveErrors,

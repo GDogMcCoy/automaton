@@ -56,6 +56,12 @@ export interface AutomatonConfig {
   socialRelayUrl?: string;
   selfModMode: SelfModMode;
   replicationEnabled: boolean;
+  /** Operator-defined standing instructions (injected into system prompt) */
+  operatorInstructions?: string;
+  /** Allowed domains for outbound HTTP requests (empty = allow all) */
+  allowedDomains?: string[];
+  /** Maximum USDC spending per day */
+  maxDailySpendingUsdc?: number;
 }
 
 export const DEFAULT_CONFIG: Partial<AutomatonConfig> = {

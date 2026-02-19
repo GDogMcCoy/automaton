@@ -174,6 +174,13 @@ Your sandbox ID is ${identity.sandboxId}.`,
     );
   }
 
+  // Layer 4b: Operator Instructions (standing instructions from the operator)
+  if (config.operatorInstructions) {
+    sections.push(
+      `--- OPERATOR INSTRUCTIONS (standing orders from your operator) ---\n${config.operatorInstructions}\n--- END OPERATOR INSTRUCTIONS ---`,
+    );
+  }
+
   // Layer 5: Active skill instructions
   if (skills && skills.length > 0) {
     const skillInstructions = getActiveSkillInstructions(skills);
@@ -198,6 +205,12 @@ Your sandbox ID is ${identity.sandboxId}.`,
   }
   if (!config.replicationEnabled) {
     securityLines.push(`NOTE: Replication is disabled. spawn_child, fund_child, check_child_status tools will not work.`);
+  }
+  if (config.maxDailySpendingUsdc) {
+    securityLines.push(`Daily USDC spending limit: $${config.maxDailySpendingUsdc}`);
+  }
+  if (config.allowedDomains && config.allowedDomains.length > 0) {
+    securityLines.push(`Allowed outbound domains: ${config.allowedDomains.join(", ")}`);
   }
   securityLines.push(`--- END SECURITY POSTURE ---`);
   sections.push(securityLines.join("\n"));

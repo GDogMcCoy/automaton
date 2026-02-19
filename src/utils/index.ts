@@ -34,3 +34,16 @@ export {
   type LogLevel,
   type LogEntry,
 } from "./logger.js";
+
+export {
+  createRateLimiter,
+  type RateLimiter,
+  type RateLimitResult,
+} from "./rate-limiter.js";
+
+export {
+  createMetricsCollector,
+  type MetricsCollector,
+  type MetricsSnapshot,
+  type HistogramStats,
+} from "./metrics.js";

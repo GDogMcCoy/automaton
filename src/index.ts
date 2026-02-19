@@ -9,7 +9,7 @@
 
 import { getWallet, getAutomatonDir } from "./identity/wallet.js";
 import { provision, loadApiKeyFromConfig } from "./identity/provision.js";
-import { loadConfig, resolvePath } from "./config.js";
+import { loadConfig, resolvePath, validateConfig } from "./config.js";
 import { createDatabase } from "./state/database.js";
 import { createConwayClient } from "./conway/client.js";
 import { createInferenceClient } from "./conway/inference.js";
@@ -135,6 +135,8 @@ Heartbeats: ${heartbeats.filter((h) => h.enabled).length} active
 Children:   ${children.filter((c) => c.status !== "dead").length} alive / ${children.length} total
 Agent ID:   ${registry?.agentId || "not registered"}
 Model:      ${config.inferenceModel}
+Self-Mod:   ${config.selfModMode}
+Replication:${config.replicationEnabled ? " enabled" : " DISABLED"}
 Version:    ${config.version}
 ========================
 `);
@@ -152,6 +154,22 @@ async function run(): Promise<void> {
   if (!config) {
     const { runSetupWizard } = await import("./setup/wizard.js");
     config = await runSetupWizard();
+  }
+
+  // Validate config
+  const configIssues = validateConfig(config);
+  if (configIssues.length > 0) {
+    console.warn(`[${new Date().toISOString()}] Config warnings:`);
+    for (const issue of configIssues) {
+      console.warn(`  - ${issue}`);
+    }
+  }
+
+  // Configure spending limits from config
+  if (config.maxDailySpendingUsdc) {
+    const { configureSpendingLimits } = await import("./conway/x402.js");
+    configureSpendingLimits({ maxDailySpendingUsdc: config.maxDailySpendingUsdc });
+    console.log(`[${new Date().toISOString()}] Daily USDC spending limit: $${config.maxDailySpendingUsdc}`);
   }
 
   // Load wallet
@@ -178,6 +196,22 @@ async function run(): Promise<void> {
   // Initialize database
   const dbPath = resolvePath(config.dbPath);
   const db = createDatabase(dbPath);
+
+  // Run database integrity check
+  const dbCheck = db.integrityCheck();
+  if (!dbCheck.ok) {
+    console.error(`[${new Date().toISOString()}] DATABASE INTEGRITY ISSUE: ${dbCheck.error}`);
+  }
+
+  // Run data cleanup (retain 30 days of history)
+  try {
+    const cleaned = db.cleanup(30);
+    if (cleaned.deletedTurns > 0 || cleaned.deletedToolCalls > 0) {
+      console.log(`[${new Date().toISOString()}] Cleanup: removed ${cleaned.deletedTurns} old turns, ${cleaned.deletedToolCalls} tool calls`);
+    }
+  } catch (err: any) {
+    console.warn(`[${new Date().toISOString()}] Cleanup failed: ${err.message}`);
+  }
 
   // Store identity in DB
   db.setIdentity("name", config.name);
