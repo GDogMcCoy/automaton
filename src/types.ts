@@ -62,6 +62,33 @@ export interface AutomatonConfig {
   allowedDomains?: string[];
   /** Maximum USDC spending per day */
   maxDailySpendingUsdc?: number;
+  /** Fallback inference providers for sovereignty (tried if Conway is down) */
+  inferenceProviders?: InferenceProviderConfig[];
+}
+
+/**
+ * Configuration for an alternative inference provider.
+ * Used by the multi-provider inference facade.
+ */
+export interface InferenceProviderConfig {
+  /** Human-readable name (e.g. "openai-direct", "anthropic", "local") */
+  name: string;
+  /** Base URL for OpenAI-compatible API */
+  apiUrl: string;
+  /** API key or auth token */
+  apiKey: string;
+  /** Auth header format: "raw" sends key as-is, "bearer" sends "Bearer {key}" */
+  authStyle?: "raw" | "bearer";
+  /** Lower number = higher priority. Conway is always 0. */
+  priority: number;
+  /** Model name mapping (e.g. { "gpt-4o": "claude-sonnet-4-5" }) */
+  modelMap?: Record<string, string>;
+  /** Whether this provider accepts x402 USDC payments */
+  x402?: boolean;
+  /** Request timeout in ms (default: 180000) */
+  timeoutMs?: number;
+  /** Whether this provider is enabled (default: true) */
+  enabled?: boolean;
 }
 
 export const DEFAULT_CONFIG: Partial<AutomatonConfig> = {

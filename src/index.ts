@@ -13,6 +13,7 @@ import { loadConfig, resolvePath, validateConfig } from "./config.js";
 import { createDatabase } from "./state/database.js";
 import { createConwayClient } from "./conway/client.js";
 import { createInferenceClient } from "./conway/inference.js";
+import { createMultiProviderInference, buildProviderList } from "./conway/multi-provider.js";
 import { createHeartbeatDaemon } from "./heartbeat/daemon.js";
 import {
   loadHeartbeatConfig,
@@ -238,13 +239,34 @@ async function run(): Promise<void> {
     sandboxId: config.sandboxId,
   });
 
-  // Create inference client
-  const inference = createInferenceClient({
-    apiUrl: config.conwayApiUrl,
-    apiKey,
-    defaultModel: config.inferenceModel,
-    maxTokens: config.maxTokensPerTurn,
+  // Create inference client (multi-provider with automatic failover)
+  const providers = buildProviderList({
+    conwayApiUrl: config.conwayApiUrl,
+    conwayApiKey: apiKey,
+    inferenceProviders: config.inferenceProviders,
   });
+
+  const hasAlternateProviders = providers.length > 1;
+  const inference = hasAlternateProviders
+    ? createMultiProviderInference({
+        providers,
+        defaultModel: config.inferenceModel,
+        maxTokens: config.maxTokensPerTurn,
+        metrics: getLoopMetrics(),
+      })
+    : createInferenceClient({
+        apiUrl: config.conwayApiUrl,
+        apiKey,
+        defaultModel: config.inferenceModel,
+        maxTokens: config.maxTokensPerTurn,
+      });
+
+  if (hasAlternateProviders) {
+    log.info("Multi-provider inference enabled", {
+      providers: providers.map((p) => p.name),
+      primary: providers[0].name,
+    });
+  }
 
   // Create social client
   let social: SocialClientInterface | undefined;

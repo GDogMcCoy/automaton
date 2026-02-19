@@ -27,7 +27,7 @@ import {
   toolsToInferenceFormat,
   executeTool,
 } from "./tools.js";
-import { getSurvivalTier } from "../conway/credits.js";
+import { getSurvivalTier, getSovereignSurvivalTier } from "../conway/credits.js";
 import { getUsdcBalance } from "../conway/x402.js";
 import { createLogger } from "../utils/logger.js";
 import { createMetricsCollector } from "../utils/metrics.js";
@@ -194,10 +194,11 @@ export async function runAgentLoop(
       financial = await getFinancialState(conway, identity.address);
       loopMetrics.gauge("loop.credits", financial.creditsCents);
 
-      // Check survival tier
-      const tier = getSurvivalTier(financial.creditsCents);
+      // Check survival tier (sovereign: considers USDC as fallback)
+      const tier = getSovereignSurvivalTier(financial.creditsCents, financial.usdcBalance);
+      loopMetrics.gauge("loop.usdc_balance", financial.usdcBalance);
       if (tier === "dead") {
-        log.error("No credits remaining, entering dead state");
+        log.error("No credits or USDC remaining, entering dead state");
         db.setAgentState("dead");
         onStateChange?.("dead");
         running = false;
