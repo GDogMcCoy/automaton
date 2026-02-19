@@ -148,7 +148,7 @@ export function createBuiltinTools(sandboxId: string): AutomatonTool[] {
           /\brm\s+-rf\s+\/(?!\w)/,  // rm -rf / (but allow rm -rf /tmp/...)
           /\bmkfs\b/,
           /\bdd\s+if=.*of=\/dev/,
-          /\b:\(\)\s*\{\s*:\|:&\s*\}\s*;/,  // fork bomb
+          /:\(\)\s*\{\s*:\|:&\s*\}\s*;/,  // fork bomb (no \b - colon is not a word char)
           /\bshutdown\b/,
           /\breboot\b/,
           /\bkill\s+-9\s+1\b/,
@@ -759,6 +759,15 @@ Model: ${ctx.inference.getDefaultModel()}
         required: ["name", "package"],
       },
       execute: async (args, ctx) => {
+        const serverName = args.name as string;
+        // Validate MCP server name: alphanumeric + hyphens only, max 64 chars
+        if (!/^[a-zA-Z0-9-]+$/.test(serverName)) {
+          return `Invalid MCP server name: "${serverName}". Must contain only alphanumeric characters and hyphens.`;
+        }
+        if (serverName.length > 64) {
+          return `Invalid MCP server name: "${serverName}". Must be at most 64 characters long.`;
+        }
+
         const pkg = args.package as string;
         // Validate npm package name to prevent shell injection
         if (!/^(@[a-z0-9\-~][a-z0-9\-._~]*\/)?[a-z0-9\-~][a-z0-9\-._~]*(@[a-z0-9\-._^~>=<]+)?$/i.test(pkg)) {
@@ -770,12 +779,22 @@ Model: ${ctx.inference.getDefaultModel()}
           return `Failed to install MCP server: ${result.stderr}`;
         }
 
+        // Parse optional JSON config with error handling
+        let parsedConfig: Record<string, unknown> = {};
+        if (args.config) {
+          try {
+            parsedConfig = JSON.parse(args.config as string);
+          } catch (e: any) {
+            return `Invalid JSON in config parameter: ${e.message}`;
+          }
+        }
+
         const { generateId } = await import("../conway/credits.js");
         const toolEntry = {
           id: generateId(),
-          name: args.name as string,
+          name: serverName,
           type: "mcp" as const,
-          config: args.config ? JSON.parse(args.config as string) : {},
+          config: parsedConfig,
           installedAt: new Date().toISOString(),
           enabled: true,
         };

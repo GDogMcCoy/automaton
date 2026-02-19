@@ -86,23 +86,28 @@ export async function hostAgentCard(
 ): Promise<string> {
   const cardJson = serializeAgentCard(card);
 
-  // Write a simple server script
-  const serverScript = `
-const http = require('http');
-const card = ${cardJson};
+  // Write card data as a separate JSON file, then load from server script.
+  // This avoids embedding potentially user-controlled JSON in a JS template.
+  await conway.writeFile("/tmp/agent-card-data.json", cardJson);
 
-const server = http.createServer((req, res) => {
-  if (req.url === '/.well-known/agent-card.json' || req.url === '/agent-card.json') {
-    res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
-    res.end(JSON.stringify(card, null, 2));
-  } else {
-    res.writeHead(404);
-    res.end('Not Found');
-  }
-});
-
-server.listen(${port}, () => console.log('Agent card server on port ${port}'));
-`;
+  // Write a simple server script that reads the card from the JSON file
+  const serverScript = [
+    "const http = require('http');",
+    "const fs = require('fs');",
+    "const card = JSON.parse(fs.readFileSync('/tmp/agent-card-data.json', 'utf-8'));",
+    "",
+    "const server = http.createServer((req, res) => {",
+    "  if (req.url === '/.well-known/agent-card.json' || req.url === '/agent-card.json') {",
+    "    res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });",
+    "    res.end(JSON.stringify(card, null, 2));",
+    "  } else {",
+    "    res.writeHead(404);",
+    "    res.end('Not Found');",
+    "  }",
+    "});",
+    "",
+    `server.listen(${port}, () => console.log('Agent card server on port ' + ${port}));`,
+  ].join("\n");
 
   await conway.writeFile("/tmp/agent-card-server.js", serverScript);
 

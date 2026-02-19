@@ -68,6 +68,14 @@ export async function registerAgent(
   network: Network = "mainnet",
   db: AutomatonDatabase,
 ): Promise<RegistryEntry> {
+  // Validate agentURI format
+  if (!agentURI || !agentURI.startsWith("http")) {
+    throw new Error("agentURI must be a valid HTTP(S) URL");
+  }
+  if (agentURI.length > 2048) {
+    throw new Error("agentURI exceeds maximum length of 2048 characters");
+  }
+
   const contracts = CONTRACTS[network];
   const chain = contracts.chain;
 
@@ -165,6 +173,19 @@ export async function leaveFeedback(
   network: Network = "mainnet",
   db: AutomatonDatabase,
 ): Promise<string> {
+  // Validate score range (1-5 as uint8)
+  if (!Number.isInteger(score) || score < 1 || score > 5) {
+    throw new Error("Score must be an integer between 1 and 5");
+  }
+  // Validate comment length
+  if (comment.length > 1000) {
+    throw new Error("Comment exceeds maximum length of 1000 characters");
+  }
+  // Validate agentId is a valid number
+  if (!/^\d+$/.test(agentId)) {
+    throw new Error("agentId must be a numeric string");
+  }
+
   const contracts = CONTRACTS[network];
   const chain = contracts.chain;
 

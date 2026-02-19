@@ -24,6 +24,14 @@ export function generateGenesisConfig(
     message?: string;
   },
 ): GenesisConfig {
+  // Validate child name: alphanumeric, hyphens, underscores, max 64 chars
+  if (!params.name || params.name.length > 64) {
+    throw new Error("Child name must be 1-64 characters");
+  }
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9\-_]*$/.test(params.name)) {
+    throw new Error("Child name must start with alphanumeric and contain only alphanumeric, hyphens, or underscores");
+  }
+
   // Build the child's genesis prompt from parent's mission + specialization
   let genesisPrompt = config.genesisPrompt;
 

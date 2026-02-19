@@ -65,11 +65,17 @@ export function getUpstreamDiffs(): {
   const log = git('log HEAD..origin/main --format="%H %an|||%s"');
   if (!log) return [];
 
-  return log.split("\n").map((line) => {
+  return log.split("\n").filter(Boolean).map((line) => {
     const [hashAndAuthor, message] = line.split("|||");
-    const parts = hashAndAuthor.split(" ");
-    const hash = parts[0];
+    const parts = (hashAndAuthor || "").split(" ");
+    const hash = parts[0] || "";
     const author = parts.slice(1).join(" ");
+
+    // Validate hash format before using in git command (defense in depth)
+    if (!/^[0-9a-fA-F]{7,40}$/.test(hash)) {
+      return { hash: hash.slice(0, 12), message: message || "", author, diff: "(invalid hash)" };
+    }
+
     let diff: string;
     try {
       diff = git(`diff ${hash}~1..${hash}`);
@@ -77,6 +83,6 @@ export function getUpstreamDiffs(): {
       // First commit in the range may not have a parent
       diff = git(`show ${hash} --format="" --stat`);
     }
-    return { hash: hash.slice(0, 12), message, author, diff };
+    return { hash: hash.slice(0, 12), message: message || "", author, diff };
   });
 }

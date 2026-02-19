@@ -21,8 +21,10 @@ export async function discoverAgents(
   limit: number = 20,
   network: Network = "mainnet",
 ): Promise<DiscoveredAgent[]> {
+  // Clamp limit to prevent excessive scanning (max 100)
+  const clampedLimit = Math.max(1, Math.min(limit, 100));
   const total = await getTotalAgents(network);
-  const scanCount = Math.min(total, limit);
+  const scanCount = Math.min(total, clampedLimit);
   const agents: DiscoveredAgent[] = [];
 
   // Scan from most recent to oldest

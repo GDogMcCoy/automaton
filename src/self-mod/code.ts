@@ -226,6 +226,33 @@ export async function editFile(
     };
   }
 
+  // In gated mode, apply stricter limits: only allow editing files in the
+  // automaton's own directory, and apply a tighter rate limit (5/hour).
+  if (config?.selfModMode === "gated") {
+    const automatonDir = process.env.HOME
+      ? `${process.env.HOME}/.automaton`
+      : "/root/.automaton";
+    const resolved = resolveAndValidatePath(filePath);
+    if (!resolved || !resolved.startsWith(automatonDir)) {
+      return {
+        success: false,
+        error: `GATED MODE: Can only modify files within ${automatonDir}. Use 'full' mode for unrestricted self-modification.`,
+      };
+    }
+
+    const recentMods = db.getRecentModifications(5);
+    if (recentMods.length >= 5) {
+      const oldest = recentMods[0];
+      const hourAgo = Date.now() - 60 * 60 * 1000;
+      if (oldest && new Date(oldest.timestamp).getTime() > hourAgo) {
+        return {
+          success: false,
+          error: "GATED MODE: Rate limit exceeded (max 5 modifications/hour in gated mode).",
+        };
+      }
+    }
+  }
+
   // 1. Protected file check
   if (isProtectedFile(filePath)) {
     return {
